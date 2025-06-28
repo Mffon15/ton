@@ -71,6 +71,7 @@ class MasterchainState : virtual public ShardState {
   virtual std::vector<td::Ref<McShardHash>> get_shards() const = 0;
   virtual td::Ref<McShardHash> get_shard_from_config(ShardIdFull shard) const = 0;
   virtual bool workchain_is_active(WorkchainId workchain_id) const = 0;
+  virtual td::uint32 persistent_state_split_depth(WorkchainId workchain_id) const = 0;
   virtual td::uint32 monitor_min_split_depth(WorkchainId workchain_id) const = 0;
   virtual td::uint32 min_split_depth(WorkchainId workchain_id) const = 0;
   virtual BlockSeqno min_ref_masterchain_seqno() const = 0;
@@ -84,6 +85,7 @@ class MasterchainState : virtual public ShardState {
                                    ton::LogicalTime* end_lt = nullptr) const = 0;
   virtual bool check_old_mc_block_id(const ton::BlockIdExt& blkid, bool strict = false) const = 0;
   virtual td::Result<td::Ref<ConfigHolder>> get_config_holder() const = 0;
+  virtual block::WorkchainSet get_workchain_list() const = 0;
   virtual td::Status prepare() {
     return td::Status::OK();
   }

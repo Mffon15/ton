@@ -205,6 +205,7 @@ class ValidateQuery : public td::actor::Actor {
   block::StoragePhaseConfig storage_phase_cfg_{&storage_prices_};
   block::ComputePhaseConfig compute_phase_cfg_;
   block::ActionPhaseConfig action_phase_cfg_;
+  block::SerializeConfig serialize_cfg_;
   td::RefInt256 masterchain_create_fee_, basechain_create_fee_;
 
   std::vector<block::McShardDescr> neighbors_;
@@ -234,6 +235,9 @@ class ValidateQuery : public td::actor::Actor {
   std::map<std::pair<StdSmcAddress, td::uint64>, Ref<vm::Cell>> new_dispatch_queue_messages_;
   std::set<StdSmcAddress> account_expected_defer_all_messages_;
   td::uint64 old_out_msg_queue_size_ = 0, new_out_msg_queue_size_ = 0;
+
+  std::function<td::Ref<vm::Cell>(const td::Bits256&)> storage_stat_cache_;
+  std::vector<std::pair<td::Ref<vm::Cell>, td::uint32>> storage_stat_cache_update_;
 
   bool msg_metadata_enabled_ = false;
   bool deferring_messages_enabled_ = false;
@@ -284,9 +288,11 @@ class ValidateQuery : public td::actor::Actor {
     return actor_id(this);
   }
 
+  void request_latest_mc_state();
   void after_get_latest_mc_state(td::Result<std::pair<Ref<MasterchainState>, BlockIdExt>> res);
   void after_get_mc_state(td::Result<Ref<ShardState>> res);
   void got_mc_handle(td::Result<BlockHandle> res);
+  void after_get_storage_stat_cache(td::Result<std::function<td::Ref<vm::Cell>(const td::Bits256&)>> res);
   void after_get_shard_state(int idx, td::Result<Ref<ShardState>> res);
   bool process_mc_state(Ref<MasterchainState> mc_state);
   bool try_unpack_mc_state();
@@ -399,7 +405,7 @@ class ValidateQuery : public td::actor::Actor {
 
   td::Timer work_timer_{true};
   td::ThreadCpuTimer cpu_work_timer_{true};
-  void record_stats();
+  void record_stats(bool success);
 };
 
 }  // namespace validator

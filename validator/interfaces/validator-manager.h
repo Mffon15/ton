@@ -66,19 +66,25 @@ using ValidateCandidateResult = td::Variant<UnixTime, CandidateReject>;
 
 class ValidatorManager : public ValidatorManagerInterface {
  public:
+  virtual void init_last_masterchain_state(td::Ref<MasterchainState> state) {
+  }
   virtual void set_block_state(BlockHandle handle, td::Ref<ShardState> state,
                                td::Promise<td::Ref<ShardState>> promise) = 0;
+  virtual void store_block_state_part(BlockId effective_block, td::Ref<vm::Cell> cell,
+                                      td::Promise<td::Ref<vm::DataCell>> promise) = 0;
+  virtual void set_block_state_from_data(BlockHandle handle, td::Ref<BlockData> block,
+                                         td::Promise<td::Ref<ShardState>> promise) = 0;
+  virtual void set_block_state_from_data_preliminary(std::vector<td::Ref<BlockData>> blocks,
+                                                     td::Promise<td::Unit> promise) = 0;
   virtual void get_cell_db_reader(td::Promise<std::shared_ptr<vm::CellDbReader>> promise) = 0;
-  virtual void store_persistent_state_file(BlockIdExt block_id, BlockIdExt masterchain_block_id, td::BufferSlice state,
+  virtual void store_persistent_state_file(BlockIdExt block_id, BlockIdExt masterchain_block_id,
+                                           PersistentStateType type, td::BufferSlice state,
                                            td::Promise<td::Unit> promise) = 0;
   virtual void store_persistent_state_file_gen(BlockIdExt block_id, BlockIdExt masterchain_block_id,
+                                               PersistentStateType type,
                                                std::function<td::Status(td::FileFd&)> write_data,
                                                td::Promise<td::Unit> promise) = 0;
   virtual void store_zero_state_file(BlockIdExt block_id, td::BufferSlice state, td::Promise<td::Unit> promise) = 0;
-  virtual void wait_block_state(BlockHandle handle, td::uint32 priority, td::Timestamp timeout,
-                                td::Promise<td::Ref<ShardState>> promise) = 0;
-  virtual void wait_block_state_short(BlockIdExt block_id, td::uint32 priority, td::Timestamp timeout,
-                                      td::Promise<td::Ref<ShardState>> promise) = 0;
 
   virtual void set_block_data(BlockHandle handle, td::Ref<BlockData> data, td::Promise<td::Unit> promise) = 0;
   virtual void wait_block_data(BlockHandle handle, td::uint32 priority, td::Timestamp,
@@ -106,7 +112,7 @@ class ValidatorManager : public ValidatorManagerInterface {
   virtual void set_block_candidate(BlockIdExt id, BlockCandidate candidate, CatchainSeqno cc_seqno,
                                    td::uint32 validator_set_hash, td::Promise<td::Unit> promise) = 0;
   virtual void send_block_candidate_broadcast(BlockIdExt id, CatchainSeqno cc_seqno, td::uint32 validator_set_hash,
-                                              td::BufferSlice data) = 0;
+                                              td::BufferSlice data, int mode) = 0;
 
   virtual void wait_block_state_merge(BlockIdExt left_id, BlockIdExt right_id, td::uint32 priority,
                                       td::Timestamp timeout, td::Promise<td::Ref<ShardState>> promise) = 0;
@@ -135,7 +141,8 @@ class ValidatorManager : public ValidatorManagerInterface {
   virtual void send_get_block_request(BlockIdExt id, td::uint32 priority, td::Promise<ReceivedBlock> promise) = 0;
   virtual void send_get_zero_state_request(BlockIdExt id, td::uint32 priority,
                                            td::Promise<td::BufferSlice> promise) = 0;
-  virtual void send_get_persistent_state_request(BlockIdExt id, BlockIdExt masterchain_block_id, td::uint32 priority,
+  virtual void send_get_persistent_state_request(BlockIdExt id, BlockIdExt masterchain_block_id,
+                                                 PersistentStateType type, td::uint32 priority,
                                                  td::Promise<td::BufferSlice> promise) = 0;
   virtual void send_get_block_proof_request(BlockIdExt block_id, td::uint32 priority,
                                             td::Promise<td::BufferSlice> promise) = 0;
@@ -147,26 +154,27 @@ class ValidatorManager : public ValidatorManagerInterface {
   virtual void send_ihr_message(td::Ref<IhrMessage> message) = 0;
   virtual void send_top_shard_block_description(td::Ref<ShardTopBlockDescription> desc) = 0;
   virtual void send_block_broadcast(BlockBroadcast broadcast, int mode) = 0;
+  virtual void send_validator_telemetry(PublicKeyHash key, tl_object_ptr<ton_api::validator_telemetry> telemetry) = 0;
+  virtual void send_get_out_msg_queue_proof_request(ShardIdFull dst_shard, std::vector<BlockIdExt> blocks,
+                                                    block::ImportedMsgQueueLimits limits,
+                                                    td::Promise<std::vector<td::Ref<OutMsgQueueProof>>> promise) = 0;
+  virtual void send_download_archive_request(BlockSeqno mc_seqno, ShardIdFull shard_prefix, std::string tmp_dir,
+                                             td::Timestamp timeout, td::Promise<std::string> promise) = 0;
+
+  virtual void get_block_proof_link_from_import(BlockIdExt block_id, BlockIdExt masterchain_block_id,
+                                                td::Promise<td::BufferSlice> promise) {
+    promise.set_error(td::Status::Error("not supported"));
+  }
 
   virtual void update_shard_client_state(BlockIdExt masterchain_block_id, td::Promise<td::Unit> promise) = 0;
   virtual void get_shard_client_state(bool from_db, td::Promise<BlockIdExt> promise) = 0;
-  virtual void subscribe_to_shard(ShardIdFull shard) = 0;
 
   virtual void update_async_serializer_state(AsyncSerializerState state, td::Promise<td::Unit> promise) = 0;
   virtual void get_async_serializer_state(td::Promise<AsyncSerializerState> promise) = 0;
 
   virtual void try_get_static_file(FileHash file_hash, td::Promise<td::BufferSlice> promise) = 0;
 
-  virtual void allow_block_data_gc(BlockIdExt block_id, bool is_archive, td::Promise<bool> promise) = 0;
   virtual void allow_block_state_gc(BlockIdExt block_id, td::Promise<bool> promise) = 0;
-  virtual void allow_zero_state_file_gc(BlockIdExt block_id, td::Promise<bool> promise) = 0;
-  virtual void allow_persistent_state_file_gc(BlockIdExt block_id, BlockIdExt masterchain_block_id,
-                                              td::Promise<bool> promise) = 0;
-  virtual void allow_block_signatures_gc(BlockIdExt block_id, td::Promise<bool> promise) = 0;
-  virtual void allow_block_proof_gc(BlockIdExt block_id, bool is_archive, td::Promise<bool> promise) = 0;
-  virtual void allow_block_proof_link_gc(BlockIdExt block_id, bool is_archive, td::Promise<bool> promise) = 0;
-  virtual void allow_block_candidate_gc(BlockIdExt block_id, td::Promise<bool> promise) = 0;
-  virtual void allow_block_info_gc(BlockIdExt block_id, td::Promise<bool> promise) = 0;
 
   virtual void archive(BlockHandle handle, td::Promise<td::Unit> promise) = 0;
 
@@ -202,13 +210,22 @@ class ValidatorManager : public ValidatorManagerInterface {
       td::optional<ShardIdFull> shard,
       td::Promise<tl_object_ptr<lite_api::liteServer_nonfinal_validatorGroups>> promise) = 0;
 
-  virtual void add_lite_query_stats(int lite_query_id) {
+  virtual void add_lite_query_stats(int lite_query_id, bool success) {
   }
 
   virtual void record_collate_query_stats(BlockIdExt block_id, double work_time, double cpu_work_time,
-                                          CollationStats stats) {
+                                          td::optional<CollationStats> stats) {
   }
-  virtual void record_validate_query_stats(BlockIdExt block_id, double work_time, double cpu_work_time) {
+  virtual void record_validate_query_stats(BlockIdExt block_id, double work_time, double cpu_work_time, bool success) {
+  }
+
+  virtual void add_persistent_state_description(td::Ref<PersistentStateDescription> desc) = 0;
+
+  virtual void get_storage_stat_cache(td::Promise<std::function<td::Ref<vm::Cell>(const td::Bits256&)>> promise) {
+    promise.set_error(td::Status::Error("not implemented"));
+  }
+  virtual void update_storage_stat_cache(std::vector<std::pair<td::Ref<vm::Cell>, td::uint32>> data) {
+    // not implemented
   }
 
   static bool is_persistent_state(UnixTime ts, UnixTime prev_ts) {

@@ -185,6 +185,7 @@ void ValidatorGroup::accept_block_candidate(validatorsession::BlockSourceInfo so
   auto block =
       block_data.size() > 0 ? create_block(next_block_id, std::move(block_data)).move_as_ok() : td::Ref<BlockData>{};
 
+  // OLD BROADCAST BEHAVIOR:
   // Creator of the block sends broadcast to public overlays
   // Creator of the block sends broadcast to private block overlay unless candidate broadcast was sent
   // Any node sends broadcast to custom overlays unless candidate broadcast was sent
@@ -199,6 +200,23 @@ void ValidatorGroup::accept_block_candidate(validatorsession::BlockSourceInfo so
   if (!sent_candidate) {
     send_broadcast_mode |= fullnode::FullNode::broadcast_mode_custom;
   }
+
+  // NEW BROADCAST BEHAVIOR (activate later):
+  // Masterchain block are broadcasted as Block Broadcast (with signatures). Shard blocks are broadcasted as Block Candidate Broadcast (only block data).
+  // Public and private overlays: creator sends masterchain blocks, all validators send shard blocks.
+  // Custom overlays: all nodes send all blocks.
+  // If the block was broadcasted earlier as a candidate (to private and custom overlays), the broadcast is not repeated.
+  /*int send_broadcast_mode = 0;
+  bool sent_candidate = sent_candidate_broadcasts_.contains(next_block_id);
+  if (!shard_.is_masterchain() || source_info.source.compute_short_id() == local_id_) {
+    send_broadcast_mode |= fullnode::FullNode::broadcast_mode_public;
+    if (!sent_candidate) {
+      send_broadcast_mode |= fullnode::FullNode::broadcast_mode_private_block;
+    }
+  }
+  if (!sent_candidate) {
+    send_broadcast_mode |= fullnode::FullNode::broadcast_mode_custom;
+  }*/
 
   auto P = td::PromiseCreator::lambda([=, SelfId = actor_id(this), block_id = next_block_id, prev = prev_block_ids_,
                                        promise = std::move(promise)](td::Result<td::Unit> R) mutable {
@@ -373,6 +391,7 @@ void ValidatorGroup::create_session() {
   }
   CHECK(found);
 
+  config_.catchain_opts.broadcast_speed_multiplier = opts_->get_catchain_broadcast_speed_multiplier();
   if (!config_.new_catchain_ids) {
     session_ = validatorsession::ValidatorSession::create(session_id_, config_, local_id_, std::move(vec),
                                                           make_validator_session_callback(), keyring_, adnl_, rldp_,
@@ -513,6 +532,15 @@ void ValidatorGroup::get_validator_group_info_for_litequery_cont(
   result->cc_seqno_ = validator_set_->get_catchain_seqno();
   result->candidates_ = std::move(candidates);
   promise.set_result(std::move(result));
+}
+
+void ValidatorGroup::send_block_candidate_broadcast(BlockIdExt id, td::BufferSlice data) {
+  if (sent_candidate_broadcasts_.insert(id).second) {
+    td::actor::send_closure(
+        manager_, &ValidatorManager::send_block_candidate_broadcast, id, validator_set_->get_catchain_seqno(),
+        validator_set_->get_validator_set_hash(), std::move(data),
+        fullnode::FullNode::broadcast_mode_private_block | fullnode::FullNode::broadcast_mode_custom);
+  }
 }
 
 }  // namespace validator
