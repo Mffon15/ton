@@ -18,17 +18,21 @@
 */
 #pragma once
 
-#include "full-node.h"
 #include "full-node-shard.h"
+#include "full-node.h"
 //#include "ton-node-slave.h"
+#include <map>
+#include <queue>
+#include <set>
+#include <token-manager.h>
+
 #include "interfaces/proof.h"
 #include "interfaces/shard.h"
-#include "full-node-private-overlay.hpp"
+#include "td/utils/LRUCache.h"
 
-#include <map>
-#include <set>
-#include <queue>
-#include <token-manager.h>
+#include "full-node-custom-overlays.hpp"
+#include "full-node-fast-sync-overlays.hpp"
+#include "rate-limiter.h"
 
 namespace ton {
 
@@ -44,6 +48,8 @@ class FullNodeImpl : public FullNode {
 
   void add_permanent_key(PublicKeyHash key, td::Promise<td::Unit> promise) override;
   void del_permanent_key(PublicKeyHash key, td::Promise<td::Unit> promise) override;
+  void add_collator_adnl_id(adnl::AdnlNodeIdShort id) override;
+  void del_collator_adnl_id(adnl::AdnlNodeIdShort id) override;
 
   void sign_shard_overlay_certificate(ShardIdFull shard_id, PublicKeyHash signed_key, td::uint32 expiry_at,
                                       td::uint32 max_size, td::Promise<td::BufferSlice> promise) override;
@@ -64,10 +70,11 @@ class FullNodeImpl : public FullNode {
   void initial_read_complete(BlockHandle top_block);
   void send_ihr_message(AccountIdPrefixFull dst, td::BufferSlice data);
   void send_ext_message(AccountIdPrefixFull dst, td::BufferSlice data);
-  void send_shard_block_info(BlockIdExt block_id, CatchainSeqno cc_seqnp, td::BufferSlice data);
+  void send_shard_block_info(BlockIdExt block_id, CatchainSeqno cc_seqno, td::BufferSlice data);
   void send_block_candidate(BlockIdExt block_id, CatchainSeqno cc_seqno, td::uint32 validator_set_hash,
                             td::BufferSlice data, int mode);
   void send_broadcast(BlockBroadcast broadcast, int mode);
+  void send_out_msg_queue_proof_broadcast(td::Ref<OutMsgQueueProofBroadcast> broadcats);
   void download_block(BlockIdExt id, td::uint32 priority, td::Timestamp timeout, td::Promise<ReceivedBlock> promise);
   void download_zero_state(BlockIdExt id, td::uint32 priority, td::Timestamp timeout,
                            td::Promise<td::BufferSlice> promise);
@@ -86,21 +93,30 @@ class FullNodeImpl : public FullNode {
 
   void got_key_block_config(td::Ref<ConfigHolder> config);
   void new_key_block(BlockHandle handle);
-  void send_validator_telemetry(PublicKeyHash key, tl_object_ptr<ton_api::validator_telemetry> telemetry);
 
-  void process_block_broadcast(BlockBroadcast broadcast) override;
+  void process_block_broadcast(BlockBroadcast broadcast, bool signatures_checked = false) override;
   void process_block_candidate_broadcast(BlockIdExt block_id, CatchainSeqno cc_seqno, td::uint32 validator_set_hash,
                                          td::BufferSlice data) override;
+  void process_shard_block_info_broadcast(BlockIdExt block_id, CatchainSeqno cc_seqno, td::BufferSlice data) override;
   void get_out_msg_queue_query_token(td::Promise<std::unique_ptr<ActionToken>> promise) override;
 
   void set_validator_telemetry_filename(std::string value) override;
+
+  void import_fast_sync_member_certificate(adnl::AdnlNodeIdShort local_id,
+                                           overlay::OverlayMemberCertificate cert) override {
+    VLOG(FULL_NODE_DEBUG) << "Importing fast sync overlay certificate for " << local_id << " issued by "
+                          << cert.issued_by().compute_short_id() << " expires in "
+                          << (double)cert.expire_at() - td::Clocks::system();
+    fast_sync_overlays_.add_member_certificate(local_id, std::move(cert));
+  }
 
   void start_up() override;
 
   FullNodeImpl(PublicKeyHash local_id, adnl::AdnlNodeIdShort adnl_id, FileHash zero_state_file_hash,
                FullNodeOptions opts, td::actor::ActorId<keyring::Keyring> keyring, td::actor::ActorId<adnl::Adnl> adnl,
                td::actor::ActorId<rldp::Rldp> rldp, td::actor::ActorId<rldp2::Rldp> rldp2,
-               td::actor::ActorId<dht::Dht> dht, td::actor::ActorId<overlay::Overlays> overlays,
+               td::actor::ActorId<quic::QuicSender> quic, td::actor::ActorId<dht::Dht> dht,
+               td::actor::ActorId<overlay::Overlays> overlays,
                td::actor::ActorId<ValidatorManagerInterface> validator_manager,
                td::actor::ActorId<adnl::AdnlExtClient> client, std::string db_root,
                td::Promise<td::Unit> started_promise);
@@ -119,7 +135,7 @@ class FullNodeImpl : public FullNode {
   FileHash zero_state_file_hash_;
 
   td::actor::ActorId<FullNodeShard> get_shard(AccountIdPrefixFull dst);
-  td::actor::ActorId<FullNodeShard> get_shard(ShardIdFull shard);
+  td::actor::ActorId<FullNodeShard> get_shard(ShardIdFull shard, bool historical = false);
   std::map<ShardIdFull, ShardInfo> shards_;
   int wc_monitor_min_split_ = 0;
 
@@ -127,6 +143,7 @@ class FullNodeImpl : public FullNode {
   td::actor::ActorId<adnl::Adnl> adnl_;
   td::actor::ActorId<rldp::Rldp> rldp_;
   td::actor::ActorId<rldp2::Rldp> rldp2_;
+  td::actor::ActorId<quic::QuicSender> quic_;
   td::actor::ActorId<dht::Dht> dht_;
   td::actor::ActorId<overlay::Overlays> overlays_;
   td::actor::ActorId<ValidatorManagerInterface> validator_manager_;
@@ -139,26 +156,28 @@ class FullNodeImpl : public FullNode {
   std::map<PublicKeyHash, adnl::AdnlNodeIdShort> current_validators_;
 
   std::set<PublicKeyHash> local_keys_;
+  std::map<adnl::AdnlNodeIdShort, int> local_collator_nodes_;
 
   td::Promise<td::Unit> started_promise_;
   FullNodeOptions opts_;
 
-  std::map<PublicKeyHash, td::actor::ActorOwn<FullNodePrivateBlockOverlay>> private_block_overlays_;
+  FullNodeFastSyncOverlays fast_sync_overlays_;
 
   struct CustomOverlayInfo {
     CustomOverlayParams params_;
     std::map<adnl::AdnlNodeIdShort, td::actor::ActorOwn<FullNodeCustomOverlay>> actors_;  // our local id -> actor
   };
   std::map<std::string, CustomOverlayInfo> custom_overlays_;
-  std::set<BlockIdExt> custom_overlays_sent_broadcasts_;
-  std::queue<BlockIdExt> custom_overlays_sent_broadcasts_lru_;
+  td::LRUCache<BlockIdExt, td::Unit> custom_overlays_sent_broadcasts_{256};
+  td::LRUCache<BlockIdExt, td::Unit> custom_overlays_sent_shard_block_desc_{256};
 
   void update_private_overlays();
-  void create_private_block_overlay(PublicKeyHash key);
   void update_custom_overlay(CustomOverlayInfo& overlay);
   void send_block_broadcast_to_custom_overlays(const BlockBroadcast& broadcast);
   void send_block_candidate_broadcast_to_custom_overlays(const BlockIdExt& block_id, CatchainSeqno cc_seqno,
                                                          td::uint32 validator_set_hash, const td::BufferSlice& data);
+  void send_shard_block_info_to_custom_overlays(BlockIdExt block_id, CatchainSeqno cc_seqno,
+                                                const td::BufferSlice& data);
 
   std::string validator_telemetry_filename_;
   PublicKeyHash validator_telemetry_collector_key_ = PublicKeyHash::zero();
@@ -167,6 +186,10 @@ class FullNodeImpl : public FullNode {
 
   td::actor::ActorOwn<TokenManager> out_msg_queue_query_token_manager_ =
       td::actor::create_actor<TokenManager>("tokens", /* max_tokens = */ 1);
+
+  std::shared_ptr<RateLimiter<>> limiter_;
+
+  decltype(limiter_) make_limiter(const FullNodeOptions& opts);
 };
 
 }  // namespace fullnode

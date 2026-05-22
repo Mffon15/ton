@@ -3,13 +3,14 @@ fun slice.assertEqDeeply(self, rhs: slice): slice {
     var lhs = self;
     assert(lhs.bitsEqual(rhs), 400);
     assert(lhs.remainingRefsCount() == rhs.remainingRefsCount(), 400);
-    while (lhs.remainingRefsCount()) {
+    while (lhs.remainingRefsCount() != 0) {
         lhs.loadRef().beginParse().assertEqDeeply(rhs.loadRef().beginParse());
     }
     return self;
 }
 
 
+@noinline
 fun run<TInputStruct>(input: TInputStruct, ans: slice) {
     repeat (2) {
         var s = input.toCell().beginParse();
@@ -37,10 +38,10 @@ fun test1() {
 
 type Union_8_16_32_n = int8 | null | int16 | int32;
 
-fun ans102n_8(): slice asm "b{0100001111} PUSHSLICE";
-fun ans102n_16(): slice asm "b{100000000000001111} PUSHSLICE";
-fun ans102n_32(): slice asm "b{1100000000000000000000000000001111} PUSHSLICE";
-fun ans102n_null(): slice asm "b{00} PUSHSLICE";
+fun ans102n_8(): slice asm "b{10000001111} PUSHSLICE";
+fun ans102n_16(): slice asm "b{1010000000000001111} PUSHSLICE";
+fun ans102n_32(): slice asm "b{11000000000000000000000000000001111} PUSHSLICE";
+fun ans102n_null(): slice asm "b{0} PUSHSLICE";
 
 @method_id(102)
 fun test2() {
@@ -64,10 +65,10 @@ fun ans104_8(): slice asm "b{0000001111} PUSHSLICE";
 fun ans104_16(): slice asm "b{010000000000001111} PUSHSLICE";
 fun ans104_32(): slice asm "b{1000000000000000000000000000001111} PUSHSLICE";
 
-fun ans104n_8(): slice asm "b{0100001111} PUSHSLICE";
-fun ans104n_16(): slice asm "b{100000000000001111} PUSHSLICE";
-fun ans104n_32(): slice asm "b{1100000000000000000000000000001111} PUSHSLICE";
-fun ans104n_null(): slice asm "b{00} PUSHSLICE";
+fun ans104n_8(): slice asm "b{10000001111} PUSHSLICE";
+fun ans104n_16(): slice asm "b{1010000000000001111} PUSHSLICE";
+fun ans104n_32(): slice asm "b{11000000000000000000000000000001111} PUSHSLICE";
+fun ans104n_null(): slice asm "b{0} PUSHSLICE";
 
 @method_id(104)
 fun test4() {
@@ -123,28 +124,28 @@ fun main() {}
 
 @fif_codegen
 """
-  test6 PROC:<{                 //
+  test6() PROC:<{               //
     b{010000000000001111} PUSHSLICE     //  s
-    b{00} SDBEGINSQ             //  s '8
+    b{00} SDBEGINSQ             //  s '6
     IF:<{                       //  s
-      8 LDI                     //  '12 s
+      8 LDI                     //  '10 s
       42 PUSHINT                //  'USlot1 s 'UTag=42
     }>ELSE<{                    //  s
-      b{01} SDBEGINSQ           //  s '8
+      b{01} SDBEGINSQ           //  s '6
       IF:<{                     //  s
-        16 LDI                  //  '17 s
+        16 LDI                  //  '15 s
         44 PUSHINT              //  'USlot1 s 'UTag=44
       }>ELSE<{                  //  s
-        b{10} SDBEGINSQ         //  s '8
+        b{10} SDBEGINSQ         //  s '6
         IF:<{                   //  s
-          32 LDI                //  '22 s
+          32 LDI                //  '20 s
           46 PUSHINT            //  'USlot1 s 'UTag=46
         }>ELSE<{                //  s
-          b{11} SDBEGINSQ       //  s '8
+          b{11} SDBEGINSQ       //  s '6
           IFNOTJMP:<{           //  s
             63 THROW
           }>
-          64 LDI                //  '27 s
+          64 LDI                //  '25 s
           48 PUSHINT            //  'USlot1 s 'UTag=48
         }>
       }>

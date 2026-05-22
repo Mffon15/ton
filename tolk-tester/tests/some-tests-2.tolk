@@ -35,7 +35,7 @@ fun test88(x: int) {
 }
 
 @method_id(89)
-fun test89(last: int): (int, int, int, int) {
+fun test89(last: int): (unknown, unknown, unknown, unknown) {
     var t: tuple = createEmptyTuple();
     t.push(1);
     t.push(2);
@@ -44,7 +44,7 @@ fun test89(last: int): (int, int, int, int) {
     return (t.get(0), t.get(t.size() - 1), t.first(), t.last());
 }
 
-@pure fun get10() { return 10; }
+@pure @noinline fun get10() { return 10; }
 
 @method_id(91)
 fun touchCodegen2() {
@@ -62,7 +62,7 @@ fun testDumpDontPolluteStack() {
     debug.printString(s);
     debug.dumpStack();
     debug.printString("my");
-    return (f, s.remainingBitsCount());
+    return (f, s.beginParse().remainingBitsCount());
 }
 
 @method_id(93)
@@ -114,25 +114,26 @@ fun test96(p: Point) {
 
 @fif_codegen
 """
-  touchCodegen2 PROC:<{
-    get10 CALLDICT	//  f
+  touchCodegen2() PROC:<{
+    get10() CALLDICT	//  f
   }>
 """
 
 @fif_codegen
 """
-  testDumpDontPolluteStack PROC:<{
+  testDumpDontPolluteStack() PROC:<{
     ...
     DUMPSTK
-    x{6d79} PUSHSLICE	//  f s '5
-    STRDUMP DROP
-    SBITS	//  f '6
+    x{6d79} PUSHSLICE
+    STRDUMP DROP        //  f s
+    CTOS                //  f '6
+    SBITS	            //  f '7
   }>
 """
 
 @fif_codegen
 """
-  testStartBalanceCodegen1 PROC:<{
+  testStartBalanceCodegen1() PROC:<{
     BALANCE // t
     FIRST	//  first
   }>
@@ -140,7 +141,7 @@ fun test96(p: Point) {
 
 @fif_codegen
 """
-  testStartBalanceCodegen2 PROC:<{
+  testStartBalanceCodegen2() PROC:<{
     BALANCE
     FIRST	//  first
   }>
@@ -148,24 +149,24 @@ fun test96(p: Point) {
 
 @fif_codegen
 """
-  test95 PROC:<{
+  test95() PROC:<{
     ...
-    next GETGLOB	//  g_next
-    3 PUSHINT	    //  g_next '14=3
-    4 PUSHINT	    //  g_next '14=3 '15=4
-    5 PUSHINT	    //  g_next '14=3 '15=4 '16=5
-    TRIPLE	        //  '10 '11
-    SWAP
-    cur SETGLOB
-    next SETGLOB
-    cur GETGLOB	    //  g_cur
-    next GETGLOB	//  g_cur g_next
+    $next GETGLOB	//  g_next
+    3 PUSHINT	    //  g_next '12=3
+    4 PUSHINT	    //  g_next '12=3 '13=4
+    5 PUSHINT	    //  g_next '12=3 '13=4 '14=5
+    3 TUPLE	        //  g_cur g_next
+    SWAP            //  g_next g_cur
+    $cur SETGLOB    //  g_next
+    $next SETGLOB   //
+    $cur GETGLOB    //  g_cur
+    $next GETGLOB	//  g_cur g_next
   }>
 """
 
 @fif_codegen
 """
-  test96 PROC:<{
+  test96() PROC:<{
     s1 DUMP s0 DUMP 2 BLKDROP
   }>
 """

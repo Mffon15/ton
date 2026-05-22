@@ -15,11 +15,11 @@
     along with TON Blockchain Library.  If not, see <http://www.gnu.org/licenses/>.
 */
 #pragma once
+#include <functional>
+
 #include "interfaces/validator-manager.h"
 #include "td/utils/ConcurrentHashTable.h"
 #include "td/utils/LRUCache.h"
-
-#include <functional>
 
 namespace ton::validator {
 
@@ -57,7 +57,12 @@ class StorageStatCache : public td::actor::Actor {
     td::Bits256 hash = td::Bits256::zero();
     vm::Dictionary* cache;
   };
-  td::LRUCache<td::Bits256, Deleter> lru_{1 << 24};
+  td::LRUCache<td::Bits256, Deleter> lru_{MAX_CACHE_TOTAL_CELLS};
+
+  static constexpr td::uint64 MAX_CACHE_TOTAL_CELLS = 1 << 24;
+
+ public:
+  static constexpr td::uint64 MIN_ACCOUNT_CELLS = 4000;
 };
 
 }  // namespace ton::validator
