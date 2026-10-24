@@ -1,7 +1,7 @@
 // Standard library for Tolk (LGPL licence).
 // It contains common functions that are available out of the box, the user doesn't have to import anything.
 // More specific functions are required to be imported explicitly, like "@stdlib/gas-payments".
-tolk 1.4.1
+tolk 1.5
 
 /**
     Built-in types.
@@ -68,8 +68,8 @@ type intN = builtin
 /// overflow will happen at serialization to a cell/builder, NOT at assignment. 
 type uintN = builtin
 
-/// `coins` is a special primitive representing "nanotoncoins". One TON = 10^9 nanotoncoins.
-/// You can create coins with `ton()` function: `ton("0.05")` (actually, `int` 50000000 at runtime).
+/// `coins` is a special primitive representing "nanograms". One GRAM = 10^9 nanograms.
+/// You can create coins with `grams()` function: `grams("0.05")` (actually, `int` 50000000 at runtime).
 /// Arithmetic operations on `coins` degrade to 257-bit `int` type.
 type coins = builtin
 
@@ -98,9 +98,6 @@ type string = builtin
 /// Note: similar to `intN`, you can assign an invalid slice to `bitsN`,
 /// an error will be fired at serialization with [T.toCell] and similar, NOT at assignment.
 type bitsN = builtin
-
-/// `bytes8`, `bytes99`, etc. is a convenient alias for `bits(N*8)`
-type bytesN = builtin
 
 /// `map<K, V>` is "a map from a key K to a value V".
 /// Internally, it's an "optional cell": an empty map is `null`, a non-empty points to a root cell.
@@ -217,38 +214,38 @@ fun createEmptyTuple(): array<unknown>
 /// If its size exceeds 255, throws a type check exception.
 @pure
 fun array<T>.push(mutate self, value: T): void
-    builtin
+    asm "TPUSH" // for multi-slot T, the value is first TUPLE'd
 
 /// Returns the first element of a non-empty array.
 @pure
 fun array<T>.first(self): T
-    builtin
+    asm "FIRST" // for multi-slot T, the result is additionally UNTUPLE'd
 
 /// Returns the `i`-th element of an array.
 @pure
 fun array<T>.get(self, index: int): T
-    builtin
+    asm "INDEXVAR" // constant index uses `INDEX n`; multi-slot T is additionally UNTUPLE'd
 
 /// Sets the `i`-th element of an array to a specified value
 /// (an element with this index must already exist, a new element is not created).
 @pure
 fun array<T>.set(mutate self, value: T, index: int): void
-    builtin
+    asm "SETINDEXVAR" // constant index uses `SETINDEX n`; multi-slot T is first TUPLE'd
 
 /// Returns the size of an array (elements count in it).
 @pure
 fun array<T>.size(self): int
-    builtin
+    asm "TLEN"
 
 /// Returns the last element of a non-empty array.
 @pure
 fun array<T>.last(self): T
-    builtin
+    asm "LAST" // for multi-slot T, the result is additionally UNTUPLE'd
 
 /// Pops and returns the last element of a non-empty array.
 @pure
 fun array<T>.pop(mutate self): T
-    builtin
+    asm "TPOP" // for multi-slot T, the result is additionally UNTUPLE'd
 
 /// Packs any object from a stack to a tuple. 
 /// An object occupies N slots on a stack — the tuple will be of size N.
@@ -266,22 +263,28 @@ fun array<T>.pop(mutate self): T
 /// See [T.fromTuple] counterpart.
 @pure
 fun T.toTuple(self): array<unknown>
-    builtin
+    asm "1 TUPLE" // 1 is replaced by T's stack width; TUPLEVAR is used above 15
 
 /// Unpacks a tuple back to an object on a stack.
 /// It works identically as casting `unknown` to an object.
 /// See [T.toTuple] for explanation and examples.
 @pure
 fun T.fromTuple(packedObject: array<unknown>): T
-    builtin
+    asm "1 UNTUPLE" // 1 is replaced by T's stack width; UNTUPLEVAR is used above 15
 
 /**
     Mathematical primitives.
  */
 
-/// Converts a constant floating-point string to nanotoncoins.
-/// Example: `ton("0.05")` is equal to 50000000.
-/// Note, that `ton()` requires a constant string; `ton(some_var)` is an error.
+/// Converts a constant floating-point string to nanograms.
+/// Example: `grams("0.05")` is equal to 50000000.
+/// Note, that `grams()` requires a constant string; `grams(some_var)` is an error.
+@pure
+fun grams(floatString: string): coins
+    builtin
+
+/// Deprecated alias for [grams].
+@deprecated("""use `grams("0.05")` instead of `ton("0.05")`""")
 @pure
 fun ton(floatString: string): coins
     builtin
@@ -326,22 +329,22 @@ fun modDiv(x: int, y: int): (int, int)
 /// The intermediate result is stored in a 513-bit integer to prevent precision loss.
 @pure
 fun mulDivFloor(x: int, y: int, z: int): int
-    builtin
+    asm "MULDIV" // constants may fold or use specialized shift/div instructions
 
 /// Similar to [mulDivFloor], but rounds the result: round(x * y / z).
 @pure
 fun mulDivRound(x: int, y: int, z: int): int
-    builtin
+    asm "MULDIVR" // constants may fold or use specialized shift/div instructions
 
 /// Similar to [mulDivFloor], but ceils the result: ceil(x * y / z).
 @pure
 fun mulDivCeil(x: int, y: int, z: int): int
-    builtin
+    asm "MULDIVC" // constants may fold or use specialized shift/div instructions
 
 /// Computes the quotient and remainder of (x * y / z). Example: mulDivMod(112,3,10) = (33,6)
 @pure
 fun mulDivMod(x: int, y: int, z: int): (int, int)
-    builtin
+    asm "MULDIVMOD"
 
 
 /**
@@ -358,7 +361,7 @@ struct contract
 fun contract.getAddress(): address
     asm "MYADDR"
 
-/// Returns the balance (in nanotoncoins) of the smart contract at the start of Computation Phase.
+/// Returns the balance (in nanograms) of the smart contract at the start of Computation Phase.
 @pure
 fun contract.getOriginalBalance(): coins
     asm "BALANCE" "FIRST"
@@ -670,21 +673,18 @@ fun slice.bitsHash(self): uint256
 fun cell.hashEqual(self, another: cell): bool
     asm "HASHCU" "SWAP" "HASHCU" "EQUAL"
 
-/// Checks the Ed25519-`signature` of a `hash` (uint256, usually computed as the hash of some data)
-/// using `publicKey` (also represented by a 256-bit unsigned integer).
+/// Checks an Ed25519 signature where the signed message is the 32-byte big-endian encoding of `hash`.
+/// Use this when off-chain code signed a 32-byte hash or digest value.
 /// The signature must contain at least 512 data bits; only the first 512 bits are used.
-/// Note that `CHKSIGNU` creates a 256-bit slice with the hash and calls `CHKSIGNS`.
-/// That is, if parameter `hash` is computed as the hash of some data, these data are hashed twice,
-/// the second hashing occurring inside `CHKSIGNS`.
 @pure
 fun isSignatureValid(hash: uint256, signature: slice, publicKey: uint256): bool
     asm "CHKSIGNU"
 
-/// Checks whether `signature` is a valid Ed25519-signature of the data portion of slice `data` using `publicKey`,
-/// similarly to [isSignatureValid].
+/// Checks an Ed25519 signature where the signed message is the data bytes of slice `data`.
+/// References of `data` are ignored.
 /// If the bit length of `data` is not divisible by eight, throws a cell underflow exception.
-/// The verification of Ed25519 signatures is the standard one,
-/// with sha256 used to reduce `data` to the 256-bit number that is actually signed.
+/// This function does not hash `data`; if off-chain code signed SHA-256(data), use
+/// `isSignatureValid(data.bitsHash(), signature, publicKey)` instead.
 @pure
 fun isSliceSignatureValid(data: slice, signature: slice, publicKey: int): bool
     asm "CHKSIGNS"
@@ -785,15 +785,15 @@ struct debug
 
 /// Dump a variable to the debug log as a raw TVM stack value.
 fun debug.print<T>(x: T): void
-    builtin
+    asm "s0 DUMP" "DROP" // repeated for every stack slot of multi-slot T
 
 /// Dump a string to the debug log.
 fun debug.printString(x: string): void
-    builtin
+    asm "CTOS" "STRDUMP" "DROP" // only the first snake chunk is dumped
 
 /// Dumps the stack (at most the top 255 values) and shows the total stack depth.
 fun debug.dumpStack(): void
-    builtin
+    asm "DUMPSTK"
 
 
 /*
@@ -819,14 +819,14 @@ fun debug.dumpStack(): void
 @pure
 @deprecated("use `[]` instead of `createEmptyMap`")
 fun createEmptyMap<K, V>(): map<K, V>
-    builtin
+    asm "NEWDICT" // an empty map is represented by TVM null
 
 /// Converts a low-level TVM dictionary to a typed map.
 /// Actually, does nothing: accepts an "optional cell" and returns the same "optional cell",
 /// so if you specify key/value types incorrectly, it will fail later, at `map.get` and similar.
 @pure
 fun createMapFromLowLevelDict<K, V>(d: dict): map<K, V>
-    builtin
+    asm "NOP" // map and low-level dict have the same runtime representation
 
 /// Converts a high-level map to a low-level TVM dictionary.
 /// Actually, does nothing: returns the same "optional cell".
@@ -844,7 +844,7 @@ fun map<K, V>.isEmpty(self): bool
 /// Checks whether a key exists in a map.
 @pure
 fun map<K, V>.exists(self, key: K): bool
-    builtin
+    asm "DICTGET" // actual lowering depends on K/V serialization
 
 /// Gets an element by key. If not found, does NOT throw, just returns isFound = false.
 /// ```
@@ -855,12 +855,12 @@ fun map<K, V>.exists(self, key: K): bool
 /// ```
 @pure
 fun map<K, V>.get(self, key: K): MapLookupResult<V>
-    builtin
+    asm "DICTGET" // actual lowering depends on K/V serialization
 
 /// Gets an element by key and throws if it doesn't exist.
 @pure
 fun map<K, V>.mustGet(self, key: K, throwIfNotFound: int = 9): V
-    builtin
+    asm "DICTGET" // actual lowering depends on K/V serialization
 
 /// Sets an element by key.
 /// ```
@@ -869,7 +869,7 @@ fun map<K, V>.mustGet(self, key: K, throwIfNotFound: int = 9): V
 /// Since it returns `self`, calls may be chained.
 @pure
 fun map<K, V>.set(mutate self, key: K, value: V): self
-    builtin
+    asm "DICTSET" // actual lowering depends on K/V serialization
 
 /// Sets an element and returns the previous element at that key. If no previous, isFound = false.
 /// ```
@@ -880,32 +880,32 @@ fun map<K, V>.set(mutate self, key: K, value: V): self
 /// ```
 @pure
 fun map<K, V>.setAndGetPrevious(mutate self, key: K, value: V): MapLookupResult<V>
-    builtin
+    asm "DICTSETGET" // actual lowering depends on K/V serialization
 
 /// Sets an element only if the key already exists. Returns whether an element was replaced.
 @pure
 fun map<K, V>.replaceIfExists(mutate self, key: K, value: V): bool
-    builtin
+    asm "DICTREPLACE" // actual lowering depends on K/V serialization
 
 /// Sets an element only if the key already exists and returns the previous element at that key.
 @pure
 fun map<K, V>.replaceAndGetPrevious(mutate self, key: K, value: V): MapLookupResult<V>
-    builtin
+    asm "DICTREPLACEGET" // actual lowering depends on K/V serialization
 
 /// Sets an element only if the key does not exist. Returns whether an element was added.
 @pure
 fun map<K, V>.addIfNotExists(mutate self, key: K, value: V): bool
-    builtin
+    asm "DICTADD" // actual lowering depends on K/V serialization
 
 /// Sets an element only if the key does not exist. If exists, returns an old value.
 @pure
 fun map<K, V>.addOrGetExisting(mutate self, key: K, value: V): MapLookupResult<V>
-    builtin
+    asm "DICTADDGET" // actual lowering depends on K/V serialization
 
 /// Delete an element at the key. Returns whether an element was deleted. 
 @pure
 fun map<K, V>.delete(mutate self, key: K): bool
-    builtin
+    asm "DICTDEL" // actual lowering depends on K/V serialization
 
 /// Delete an element at the key and returns the deleted element. If not exists, isFound = false.
 /// ```
@@ -916,7 +916,7 @@ fun map<K, V>.delete(mutate self, key: K): bool
 /// ```
 @pure
 fun map<K, V>.deleteAndGetDeleted(mutate self, key: K): MapLookupResult<V>
-    builtin
+    asm "DICTDELGET" // actual lowering depends on K/V serialization
 
 /// Finds the first (minimal) element in a map. If key are integers, it's the minimal integer.
 /// If keys are addresses or complex structures (represented as slices), it's lexicographically smallest.
@@ -931,7 +931,7 @@ fun map<K, V>.deleteAndGetDeleted(mutate self, key: K): MapLookupResult<V>
 /// ```
 @pure
 fun map<K, V>.findFirst(self): MapEntry<K, V>
-    builtin
+    asm "DICTMIN" // actual lowering depends on K/V serialization
 
 /// Finds the last (maximal) element in a map. If key are integers, it's the maximal integer.
 /// If keys are addresses or complex structures (represented as slices), it's lexicographically largest.
@@ -946,31 +946,31 @@ fun map<K, V>.findFirst(self): MapEntry<K, V>
 /// ```
 @pure
 fun map<K, V>.findLast(self): MapEntry<K, V>
-    builtin
+    asm "DICTMAX" // actual lowering depends on K/V serialization
 
 /// Finds an element with key > pivotKey.
 /// Don't forget to check `isFound` before using `getKey()` and `loadValue()` of the result.
 @pure
 fun map<K, V>.findKeyGreater(self, pivotKey: K): MapEntry<K, V>
-    builtin
+    asm "DICTGETNEXT" // actual lowering depends on K/V serialization
 
 /// Finds an element with key >= pivotKey.
 /// Don't forget to check `isFound` before using `getKey()` and `loadValue()` of the result.
 @pure
 fun map<K, V>.findKeyGreaterOrEqual(self, pivotKey: K): MapEntry<K, V>
-    builtin
+    asm "DICTGETNEXTEQ" // actual lowering depends on K/V serialization
 
 /// Finds an element with key < pivotKey.
 /// Don't forget to check `isFound` before using `getKey()` and `loadValue()` of the result.
 @pure
 fun map<K, V>.findKeyLess(self, pivotKey: K): MapEntry<K, V>
-    builtin
+    asm "DICTGETPREV" // actual lowering depends on K/V serialization
 
 /// Finds an element with key <= pivotKey.
 /// Don't forget to check `isFound` before using `getKey()` and `loadValue()` of the result.
 @pure
 fun map<K, V>.findKeyLessOrEqual(self, pivotKey: K): MapEntry<K, V>
-    builtin
+    asm "DICTGETPREVEQ" // actual lowering depends on K/V serialization
 
 /// Iterate over a map in ascending order.
 /// ```
@@ -983,7 +983,7 @@ fun map<K, V>.findKeyLessOrEqual(self, pivotKey: K): MapEntry<K, V>
 /// ```
 @pure
 fun map<K, V>.iterateNext(self, current: MapEntry<K, V>): MapEntry<K, V>
-    builtin
+    asm "DICTGETNEXT" // actual lowering depends on K/V serialization
 
 /// Iterate over a map in reverse order.
 /// ```
@@ -996,7 +996,7 @@ fun map<K, V>.iterateNext(self, current: MapEntry<K, V>): MapEntry<K, V>
 /// ```
 @pure
 fun map<K, V>.iteratePrev(self, current: MapEntry<K, V>): MapEntry<K, V>
-    builtin
+    asm "DICTGETPREV" // actual lowering depends on K/V serialization
 
 /// `MapLookupResult` is a return value of `map.get`, `map.setAndGetPrevious`, and similar.
 /// Instead of returning a nullable value (that you'd check on null before usage),
@@ -1012,7 +1012,6 @@ struct MapLookupResult<TValue> {
     isFound: bool
 }
 
-@pure
 fun MapLookupResult<TValue>.loadValue(self): TValue {
     // it's assumed that you check for `isFound` before calling `loadValue()`;
     // note that `assertEnd` is called to ensure no remaining data left besides TValue
@@ -1021,7 +1020,6 @@ fun MapLookupResult<TValue>.loadValue(self): TValue {
     })
 }
 
-@pure
 fun MapLookupResult<slice>.loadValue(self): slice {
     return self.rawSlice!
 }
@@ -1041,14 +1039,12 @@ struct MapEntry<K, V> {
     isFound: bool
 }
 
-@pure
 fun MapEntry<K, V>.getKey(self): K {
     // it's assumed that you check for `isFound` before calling `getKey()`;
     // (otherwise, it will contain an incorrect stack slot with `null` value, not K)
     return self.key
 }
 
-@pure
 fun MapEntry<K, V>.loadValue(self): V {
     // it's assumed that you check for `isFound` before calling `loadValue()`;
     // note that `assertEnd` is inserted to ensure no remaining data left besides TValue
@@ -1057,7 +1053,6 @@ fun MapEntry<K, V>.loadValue(self): V {
     })
 }
 
-@pure
 fun MapEntry<K, slice>.loadValue(self): slice {
     return self.rawValue!
 }
@@ -1180,34 +1175,34 @@ fun slice.preloadRef(self): cell
 /// Loads a signed len-bit integer from a slice.
 @pure
 fun slice.loadInt(mutate self, len: int): int
-    builtin
+    asm(-> 1 0) "LDIX" // constant len uses "LDI len"
 
 /// Loads an unsigned len-bit integer from a slice.
 @pure
 fun slice.loadUint(mutate self, len: int): int
-    builtin
+    asm(-> 1 0) "LDUX" // constant len uses "LDU len"
 
 /// Loads the first `0 ≤ len ≤ 1023` bits from a slice.
 @pure
 fun slice.loadBits(mutate self, len: int): slice
-    builtin
+    asm(-> 1 0) "LDSLICEX" // constant len uses "LDSLICE len"
 
 /// Preloads a signed len-bit integer from a slice.
 @pure
 fun slice.preloadInt(self, len: int): int
-    builtin
+    asm "PLDIX" // constant len uses "PLDI len"
 
 /// Preloads an unsigned len-bit integer from a slice.
 @pure
 fun slice.preloadUint(self, len: int): int
-    builtin
+    asm "PLDUX" // constant len uses "PLDU len"
 
 /// Preloads the first `0 ≤ len ≤ 1023` bits from a slice.
 @pure
 fun slice.preloadBits(self, len: int): slice
-    builtin
+    asm "PLDSLICEX" // constant len uses "PLDSLICE len"
 
-/// Loads the serialized amount of nanotoncoins (any unsigned integer up to `2^120 - 1`).
+/// Loads the serialized amount of nanograms (any unsigned integer up to `2^120 - 1`).
 @pure
 fun slice.loadCoins(mutate self): coins
     asm( -> 1 0) "LDGRAMS"
@@ -1220,7 +1215,7 @@ fun slice.loadBool(mutate self): bool
 /// Shifts a slice pointer to len bits forward.
 @pure
 fun slice.skipBits(mutate self, len: int): self
-    builtin
+    asm "SDSKIPFIRST" // constant skips can be merged
 
 /// Returns the first `0 ≤ len ≤ 1023` bits of a slice.
 @pure
@@ -1311,12 +1306,12 @@ fun builder.storeRef(mutate self, c: cell): self
 /// Stores a signed len-bit integer into a builder (`0 ≤ len ≤ 257`).
 @pure
 fun builder.storeInt(mutate self, x: int, len: int): self
-    builtin
+    asm(x self len) "STIX" // constant len uses "STI len" or even merged to STSLICECONST
 
 /// Stores an unsigned len-bit integer into a builder (`0 ≤ len ≤ 256`).
 @pure
 fun builder.storeUint(mutate self, x: int, len: int): self
-    builtin
+    asm(x self len) "STUX" // constant len uses "STU len" or even merged to STSLICECONST
 
 /// Stores a slice into a builder.
 @pure
@@ -1349,15 +1344,15 @@ fun builder.storeAddressAny(mutate self, addrAny: any_address): self
 fun builder.storeAddressNone(mutate self): self
     asm "b{00} STSLICECONST"
 
-/// Stores the amount of nanotoncoins into a builder.
+/// Stores the amount of nanograms into a builder.
 @pure
 fun builder.storeCoins(mutate self, x: coins): self
-    builtin
+    asm "STGRAMS" // compile-time zero can be merged with adjacent stores
 
 /// Stores a boolean into a builder.
 @pure
 fun builder.storeBool(mutate self, x: bool): self
-    builtin
+    asm(x self) "1 STI" // compile-time value can be merged with adjacent stores
 
 /// Stores a low-level TVM dictionary (optional cell) into a builder.
 /// In other words, if `c` is null, stores `0`; if `c` is not null, stores `1` and a reference to `c`.
@@ -1526,10 +1521,10 @@ fun slice.loadAddressAny(mutate self): any_address
 
 
 /**
-    Reserving Toncoins on balance and its flags.
+    Reserving GRAMs on balance and its flags.
  */
 
-/// mode = 0: Reserve exact amount of nanotoncoins
+/// mode = 0: Reserve exact amount of nanograms
 const RESERVE_MODE_EXACT_AMOUNT = 0
 /// +1: Actually reserves all but amount, meaning `currentContractBalance - amount`
 const RESERVE_MODE_ALL_BUT_AMOUNT = 1
@@ -1542,14 +1537,19 @@ const RESERVE_MODE_NEGATE_AMOUNT = 8
 /// +16: If this action fails, the transaction will be bounced.
 const RESERVE_MODE_BOUNCE_ON_ACTION_FAIL = 16
 
-/// Creates an output action which would reserve Toncoins on balance.
+/// Creates an output action which would reserve GRAMs on balance.
 /// For `reserveMode` consider constants above.
-fun reserveToncoinsOnBalance(nanoTonCoins: coins, reserveMode: int): void
+fun reserveGramsOnBalance(nanoGrams: coins, reserveMode: int): void
     asm "RAWRESERVE"
 
-/// Similar to [reserveToncoinsOnBalance], but also accepts a dictionary extraAmount (represented by a cell or null)
-/// with extra currencies. In this way currencies other than Toncoin can be reserved.
-fun reserveExtraCurrenciesOnBalance(nanoTonCoins: coins, extraAmount: dict, reserveMode: int): void
+/// Deprecated alias for [reserveGramsOnBalance].
+@deprecated("use `reserveGramsOnBalance` instead of `reserveToncoinsOnBalance`")
+fun reserveToncoinsOnBalance(nanoGrams: coins, reserveMode: int): void
+    asm "RAWRESERVE"
+
+/// Similar to [reserveGramsOnBalance], but also accepts a dictionary extraAmount (represented by a cell or null)
+/// with extra currencies. In this way currencies other than GRAM can be reserved.
+fun reserveExtraCurrenciesOnBalance(nanoGrams: coins, extraAmount: dict, reserveMode: int): void
     asm "RAWRESERVEX"
 
 
@@ -1582,7 +1582,7 @@ const SEND_MODE_ESTIMATE_FEE_ONLY = 1024
 /// +64 substitutes the entire balance of the incoming message as an outgoing value (slightly inaccurate, gas expenses that cannot be estimated before the computation is completed are not taken into account).
 /// +128 substitutes the value of the entire balance of the contract before the start of the computation phase (slightly inaccurate, since gas expenses that cannot be estimated before the completion of the computation phase are not taken into account).
 
-/// `ExtraCurrenciesMap` represents a dictionary of "extra currencies" other than TON coin.
+/// `ExtraCurrenciesMap` represents a dictionary of "extra currencies" other than GRAM.
 /// They can be attached to a message (incoming and outgoing) and stored on contract's balance.
 /// It's a dictionary `[currencyID => amount]` (amount is like `coins`, but encoded with a high precision). 
 type ExtraCurrenciesMap = map<int32, varuint32>
@@ -1691,7 +1691,7 @@ type OldBounceMode = bool
 struct CreateMessageOptions<TBody = void> {
     /// whether a message will bounce back on error, and what piece of outgoing `body` it will contain
     bounce: BounceMode | OldBounceMode
-    /// message value: attached tons (or tons + extra currencies)
+    /// message value: attached grams (or grams + extra currencies)
     value: coins | (coins, ExtraCurrenciesMap)
     /// destination is either a provided address, or is auto-calculated by stateInit
     dest: address               // either just send a message to some address
@@ -1707,7 +1707,7 @@ struct CreateMessageOptions<TBody = void> {
 /// ```
 /// val reply = createMessage({
 ///     bounce: BounceMode.NoBounce,
-///     value: ton("0.05"),
+///     value: grams("0.05"),
 ///     dest: senderAddress,
 ///     body: RequestedInfo { ... }    // note: no toCell! just pass an object
 /// });
@@ -1913,7 +1913,7 @@ fun sendRawMessage(msg: cell, mode: int): void
 /// ```
 struct InMessage {
     senderAddress: address          // an internal address from which the message arrived
-    valueCoins: coins               // ton amount attached to an incoming message
+    valueCoins: coins               // GRAM amount attached to an incoming message
     valueExtra: ExtraCurrenciesMap  // extra currencies attached to an incoming message
     originalForwardFee: coins       // fee that was paid by the sender
     createdLt: uint64               // logical time when a message was created
@@ -1934,7 +1934,7 @@ struct InMessage {
 /// ```
 struct InMessageBounced {
     senderAddress: address          // an internal address from which the message was bounced
-    valueCoins: coins               // ton amount attached to a message
+    valueCoins: coins               // GRAM amount attached to a message
     valueExtra: ExtraCurrenciesMap  // extra currencies attached to a message
     originalForwardFee: coins       // commission that the sender has paid to send this message
     createdLt: uint64               // logical time when a message was created (and bounced)
@@ -1970,7 +1970,7 @@ struct RichBounceComputePhaseInfo {
 /// ```
 /// createMessage({
 ///     bounce: BounceMode.RichBounce,
-///     value: ton("0.05")   // it will be `valueCoins` if this message is bounced
+///     value: grams("0.05")   // it will be `valueCoins` if this message is bounced
 /// ```
 struct RichBounceOriginalMsgInfo {
     valueCoins: coins

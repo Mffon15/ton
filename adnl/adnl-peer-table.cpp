@@ -50,8 +50,10 @@ td::actor::ActorOwn<Adnl> Adnl::create(std::string db, td::actor::ActorId<keyrin
 }
 
 void AdnlPeerTableImpl::receive_packet(td::IPAddress addr, AdnlCategoryMask cat_mask, td::BufferSlice data) {
+  metrics_.transport.inbound_packets.inc();
   if (data.size() < 32) {
-    VLOG(ADNL_WARNING) << this << ": dropping IN message [?->?]: message too short: len=" << data.size();
+    record_transport_dropped(metrics::Direction::in, metrics::Reason::invalid);
+    VLOG(adnl, WARNING) << this << ": dropping IN message [?->?]: message too short: len=" << data.size();
     return;
   }
 
@@ -61,7 +63,8 @@ void AdnlPeerTableImpl::receive_packet(td::IPAddress addr, AdnlCategoryMask cat_
   auto it = local_ids_.find(dst);
   if (it != local_ids_.end()) {
     if (!cat_mask.test(it->second.cat)) {
-      VLOG(ADNL_WARNING) << this << ": dropping IN message [?->" << dst << "]: category mismatch";
+      record_transport_dropped(metrics::Direction::in, metrics::Reason::invalid);
+      VLOG(adnl, WARNING) << this << ": dropping IN message [?->" << dst << "]: category mismatch";
       return;
     }
     td::actor::send_closure(it->second.local_id, &AdnlLocalId::receive, addr, std::move(data));
@@ -72,15 +75,17 @@ void AdnlPeerTableImpl::receive_packet(td::IPAddress addr, AdnlCategoryMask cat_
   auto it2 = channels_.find(dst_chan_id);
   if (it2 != channels_.end()) {
     if (!cat_mask.test(it2->second.second)) {
-      VLOG(ADNL_WARNING) << this << ": dropping IN message to channel [?->" << dst << "]: category mismatch";
+      record_transport_dropped(metrics::Direction::in, metrics::Reason::invalid);
+      VLOG(adnl, WARNING) << this << ": dropping IN message to channel [?->" << dst << "]: category mismatch";
       return;
     }
     td::actor::send_closure(it2->second.first, &AdnlChannel::receive, addr, std::move(data));
     return;
   }
 
-  VLOG(ADNL_DEBUG) << this << ": dropping IN message [?->" << dst << "]: unknown dst " << dst
-                   << " (len=" << (data.size() + 32) << ")";
+  record_transport_dropped(metrics::Direction::in, metrics::Reason::invalid);
+  VLOG(adnl, DEBUG) << this << ": dropping IN message [?->" << dst << "]: unknown dst " << dst
+                    << " (len=" << (data.size() + 32) << ")";
 }
 
 void AdnlPeerTableImpl::update_id(AdnlPeerTableImpl::PeerInfo &peer_info, AdnlNodeIdFull &&peer_id) {
@@ -121,10 +126,17 @@ AdnlPeerTableImpl::PeerPair *AdnlPeerTableImpl::get_peer_pair_if_exists(AdnlNode
 }
 
 void AdnlPeerTableImpl::receive_decrypted_packet(AdnlNodeIdShort dst, AdnlPacket packet, td::uint64 serialized_size) {
-  packet.run_basic_checks().ensure();
+  metrics_.transport.decrypt_packets.inc();
+  metrics_.transport.decrypt_bytes.inc(serialized_size);
+  if (auto S = packet.run_basic_checks(); S.is_error()) {
+    record_transport_dropped(metrics::Direction::in, metrics::Reason::invalid);
+    VLOG(adnl, INFO) << this << ": dropping IN message [?->" << dst << "]: " << S;
+    return;
+  }
 
   if (!packet.inited_from_short()) {
-    VLOG(ADNL_INFO) << this << ": dropping IN message [?->" << dst << "]: destination not set";
+    record_transport_dropped(metrics::Direction::in, metrics::Reason::invalid);
+    VLOG(adnl, INFO) << this << ": dropping IN message [?->" << dst << "]: src not set";
     return;
   }
   AdnlNodeIdShort src = packet.from_short();
@@ -132,13 +144,15 @@ void AdnlPeerTableImpl::receive_decrypted_packet(AdnlNodeIdShort dst, AdnlPacket
   auto it = peers_.find(src);
   if (it == peers_.end()) {
     if (!packet.inited_from()) {
-      VLOG(ADNL_NOTICE) << this << ": dropping IN message [" << packet.from_short() << "->" << dst
-                        << "]: unknown peer and no full src in packet";
+      record_transport_dropped(metrics::Direction::in, metrics::Reason::invalid);
+      VLOG(adnl, INFO) << this << ": dropping IN message [" << packet.from_short() << "->" << dst
+                       << "]: unknown peer and no full src in packet";
       return;
     }
     if (network_manager_.empty()) {
-      VLOG(ADNL_NOTICE) << this << ": dropping IN message [" << packet.from_short() << "->" << dst
-                        << "]: unknown peer and network manager uninitialized";
+      record_transport_dropped(metrics::Direction::in, metrics::Reason::internal);
+      VLOG(adnl, INFO) << this << ": dropping IN message [" << packet.from_short() << "->" << dst
+                       << "]: unknown peer and network manager uninitialized";
       return;
     }
 
@@ -147,8 +161,9 @@ void AdnlPeerTableImpl::receive_decrypted_packet(AdnlNodeIdShort dst, AdnlPacket
 
   auto it2 = local_ids_.find(dst);
   if (it2 == local_ids_.end()) {
-    VLOG(ADNL_ERROR) << this << ": dropping IN message [" << packet.from_short() << "->" << dst
-                     << "]: unknown dst (but how did we decrypt message?)";
+    record_transport_dropped(metrics::Direction::in, metrics::Reason::internal);
+    VLOG(adnl, ERROR) << this << ": dropping IN message [" << packet.from_short() << "->" << dst
+                      << "]: unknown dst (but how did we decrypt message?)";
     return;
   }
 
@@ -162,7 +177,7 @@ void AdnlPeerTableImpl::receive_decrypted_packet(AdnlNodeIdShort dst, AdnlPacket
 
 void AdnlPeerTableImpl::add_peer(AdnlNodeIdShort local_id, AdnlNodeIdFull id, AdnlAddressList addr_list) {
   auto id_short = id.compute_short_id();
-  VLOG(ADNL_DEBUG) << this << ": adding peer " << id_short << " for local id " << local_id;
+  VLOG(adnl, DEBUG) << this << ": adding peer " << id_short << " for local id " << local_id;
 
   auto it2 = local_ids_.find(local_id);
   CHECK(it2 != local_ids_.end());
@@ -178,7 +193,7 @@ void AdnlPeerTableImpl::add_peer(AdnlNodeIdShort local_id, AdnlNodeIdFull id, Ad
 void AdnlPeerTableImpl::add_static_nodes_from_config(AdnlNodesList nodes) {
   for (auto &node : nodes.nodes()) {
     auto id_short = node.compute_short_id();
-    VLOG(ADNL_INFO) << "[staticnodes] adding static node " << id_short;
+    VLOG(adnl, INFO) << "[staticnodes] adding static node " << id_short;
     static_nodes_.emplace(id_short, std::move(node));
   }
 }
@@ -187,6 +202,7 @@ void AdnlPeerTableImpl::send_message_in(AdnlNodeIdShort src, AdnlNodeIdShort dst
                                         td::uint32 flags) {
   auto it2 = local_ids_.find(src);
   if (it2 == local_ids_.end()) {
+    record_transport_dropped(metrics::Direction::out, metrics::Reason::invalid);
     LOG(ERROR) << this << ": dropping OUT message [" << src << "->" << dst << "]: unknown src";
     return;
   }
@@ -201,28 +217,40 @@ void AdnlPeerTableImpl::send_message_in(AdnlNodeIdShort src, AdnlNodeIdShort dst
 void AdnlPeerTableImpl::answer_query(AdnlNodeIdShort src, AdnlNodeIdShort dst, AdnlQueryId query_id,
                                      td::BufferSlice data) {
   if (data.size() > get_mtu()) {
+    metrics_.app.record_dropped(metrics::Direction::out, metrics::Reason::limited);
     LOG(ERROR) << this << ": dropping OUT message [" << src << "->" << dst
                << "]: message too big: size=" << data.size();
     return;
   }
+  // App send traffic is accounted on the peer-pair (see AdnlPeerPairImpl::send_messages).
   send_message_in(src, dst, adnlmessage::AdnlMessageAnswer{query_id, std::move(data)}, 0);
 }
 
 void AdnlPeerTableImpl::send_query(AdnlNodeIdShort src, AdnlNodeIdShort dst, std::string name,
                                    td::Promise<td::BufferSlice> promise, td::Timestamp timeout, td::BufferSlice data) {
   if (data.size() > huge_packet_max_size()) {
-    VLOG(ADNL_WARNING) << "dropping too big packet [" << src << "->" << dst << "]: size=" << data.size();
-    VLOG(ADNL_WARNING) << "DUMP: " << td::buffer_to_hex(data.as_slice().truncate(128));
+    metrics_.app.record_dropped(metrics::Direction::out, metrics::Reason::limited);
+    VLOG(adnl, WARNING) << "dropping too big packet [" << src << "->" << dst << "]: size=" << data.size();
+    VLOG(adnl, WARNING) << "DUMP: " << td::buffer_to_hex(data.as_slice().truncate(128));
     return;
   }
 
   auto it2 = local_ids_.find(src);
   if (it2 == local_ids_.end()) {
+    record_transport_dropped(metrics::Direction::out, metrics::Reason::invalid);
     LOG(ERROR) << this << ": dropping OUT message [" << src << "->" << dst << "]: unknown src";
     return;
   }
   auto &peer_info = peers_[dst];
 
+  // Round trip starts here, where the peer pair takes the query: the early returns above never
+  // handed it to the transport, so they are not round trips at all. The answer completes on the
+  // query's own actor, hence the hop back to this thread.
+  promise = [timer = td::Timer(), magic = metrics::resolve_tl_magic(data.as_slice()), dst, self = actor_id(this),
+             promise = std::move(promise)](td::Result<td::BufferSlice> R) mutable {
+    td::actor::send_closure(self, &AdnlPeerTableImpl::record_query_roundtrip, dst, magic, timer.elapsed(), R.is_ok());
+    promise.set_result(std::move(R));
+  };
   td::actor::send_closure(get_peer_pair(dst, peer_info, src, it2->second), &AdnlPeerPair::send_query, name,
                           std::move(promise), timeout, std::move(data), 0);
 }
@@ -230,7 +258,7 @@ void AdnlPeerTableImpl::send_query(AdnlNodeIdShort src, AdnlNodeIdShort dst, std
 void AdnlPeerTableImpl::add_id_ex(AdnlNodeIdFull id, AdnlAddressList addr_list, td::uint8 cat, td::uint32 mode) {
   CHECK(id.pubkey().is_ed25519());
   auto a = id.compute_short_id();
-  VLOG(ADNL_INFO) << "adnl: adding local id " << a;
+  VLOG(adnl, INFO) << "adnl: adding local id " << a;
 
   auto it = local_ids_.find(a);
 
@@ -254,7 +282,7 @@ void AdnlPeerTableImpl::add_id_ex(AdnlNodeIdFull id, AdnlAddressList addr_list, 
 }
 
 void AdnlPeerTableImpl::del_id(AdnlNodeIdShort id, td::Promise<td::Unit> promise) {
-  VLOG(ADNL_INFO) << "adnl: deleting local id " << id;
+  VLOG(adnl, INFO) << "adnl: deleting local id " << id;
   local_ids_.erase(id);
   promise.set_value(td::Unit());
 }
@@ -344,13 +372,11 @@ void AdnlPeerTableImpl::register_channel(AdnlChannelIdShort id, AdnlNodeIdShort 
                                          td::actor::ActorId<AdnlChannel> channel) {
   auto it = local_ids_.find(local_id);
   auto cat = (it != local_ids_.end()) ? it->second.cat : 255;
-  auto success = channels_.emplace(id, std::make_pair(channel, cat)).second;
-  CHECK(success);
+  channels_.emplace(id, std::make_pair(channel, cat));
 }
 
 void AdnlPeerTableImpl::unregister_channel(AdnlChannelIdShort id) {
-  auto erased = channels_.erase(id);
-  CHECK(erased == 1);
+  channels_.erase(id);
 }
 
 void AdnlPeerTableImpl::start_up() {
@@ -396,6 +422,38 @@ void AdnlPeerTableImpl::deliver_query(AdnlNodeIdShort src, AdnlNodeIdShort dst, 
     LOG(WARNING) << "deliver query: unknown dst " << dst;
     promise.set_error(td::Status::Error(ErrorCode::notready, "cannot deliver: unknown DST"));
   }
+}
+
+td::actor::Task<> AdnlPeerTableImpl::collect(metrics::Context ctx) {
+  // Drain every peer-pair's inbound app-traffic delta into metrics_.app first (synchronous loop — the
+  // maps are never mutated across a suspension), then wait for all the round-trips to land. A
+  // peer-pair that dies mid-drain has already drained via its tear_down, so a failed ask is harmless.
+  std::vector<td::actor::StartedTask<td::Unit>> drains;
+  for (const auto &[peer_id, info] : peers_) {
+    for (const auto &[local_id, pp] : info.peers) {
+      drains.push_back(td::actor::ask(pp.actor.get(), &AdnlPeerPair::collect_metrics));
+    }
+  }
+  co_await td::actor::all_wrap(std::move(drains));
+
+  // Peers may have come and gone during the drain, so all five gauges are sampled here, after it.
+  td::uint64 peer_pairs = 0;
+  for (const auto &[peer_id, info] : peers_) {
+    peer_pairs += info.peers.size();
+  }
+  metrics_.transport.local_ids.set(local_ids_.size());
+  metrics_.transport.peers.set(peers_.size());
+  metrics_.transport.peer_pairs.set(peer_pairs);
+  metrics_.transport.channels.set(channels_.size());
+  metrics_.transport.static_nodes.set(static_nodes_.size());
+  ctx.with_name("adnl").collect(metrics_);
+  co_return {};
+}
+
+void AdnlPeerTableImpl::absorb_metrics(AdnlPeerPairMetrics delta, td::Promise<td::Unit> done) {
+  metrics_.app += delta.app;
+  metrics_.transport.dropped += delta.transport_dropped;
+  done.set_value(td::Unit());
 }
 
 void AdnlPeerTableImpl::decrypt_message(AdnlNodeIdShort dst, td::BufferSlice data,
@@ -473,8 +531,8 @@ void AdnlPeerTableImpl::get_stats_peer(AdnlNodeIdShort peer_id, AdnlPeerTableImp
         peer_pair.actor, &AdnlPeerPair::get_stats, all,
         [local_id = local_id, peer_id = peer_id, callback](td::Result<tl_object_ptr<ton_api::adnl_stats_peerPair>> R) {
           if (R.is_error()) {
-            VLOG(ADNL_NOTICE) << "failed to get stats for peer pair " << peer_id << "->" << local_id << " : "
-                              << R.move_as_error();
+            VLOG(adnl, INFO) << "failed to get stats for peer pair " << peer_id << "->" << local_id << " : "
+                             << R.move_as_error();
             td::actor::send_closure(callback, &Cb::dec_pending);
           } else {
             td::actor::send_closure(callback, &Cb::got_peer_pair_stats, R.move_as_ok());
@@ -542,7 +600,7 @@ void AdnlPeerTableImpl::get_stats(bool all, td::Promise<tl_object_ptr<ton_api::a
     td::actor::send_closure(local_id.local_id, &AdnlLocalId::get_stats, all,
                             [id = id, callback](td::Result<tl_object_ptr<ton_api::adnl_stats_localId>> R) {
                               if (R.is_error()) {
-                                VLOG(ADNL_NOTICE)
+                                VLOG(adnl, INFO)
                                     << "failed to get stats for local id " << id << " : " << R.move_as_error();
                                 td::actor::send_closure(callback, &Cb::dec_pending);
                               } else {
@@ -555,7 +613,7 @@ void AdnlPeerTableImpl::get_stats(bool all, td::Promise<tl_object_ptr<ton_api::a
     get_stats_peer(id, peer, all,
                    [id = id, callback](td::Result<std::vector<tl_object_ptr<ton_api::adnl_stats_peerPair>>> R) {
                      if (R.is_error()) {
-                       VLOG(ADNL_NOTICE) << "failed to get stats for peer " << id << " : " << R.move_as_error();
+                       VLOG(adnl, INFO) << "failed to get stats for peer " << id << " : " << R.move_as_error();
                        td::actor::send_closure(callback, &Cb::dec_pending);
                      } else {
                        td::actor::send_closure(callback, &Cb::got_peer_stats, R.move_as_ok());
@@ -599,7 +657,7 @@ void AdnlPeerTableImpl::gc_peer_pairs(AdnlNodeIdShort local_id, LocalIdInfo &loc
   while (local_id_info.peers_gc_order.size() > MAX_IDLE_PEER_PAIRS) {
     auto it = local_id_info.peers_gc_order.begin();
     AdnlNodeIdShort gc_peer_id = it->second;
-    VLOG(ADNL_NOTICE) << "Removing idle peer pair l_id=" << local_id << " p_id=" << gc_peer_id;
+    VLOG(adnl, INFO) << "Removing idle peer pair l_id=" << local_id << " p_id=" << gc_peer_id;
     peers_[gc_peer_id].peers.erase(local_id);
     if (peers_[gc_peer_id].peers.empty()) {
       // FIXME: if PeerInfo is empty from the start, it won't be erased ever

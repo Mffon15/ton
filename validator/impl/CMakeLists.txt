@@ -5,9 +5,9 @@ set(TON_VALIDATOR_SOURCE
   collator.cpp
   config.cpp
   external-message.cpp
+  ext-message-checker.cpp
   ext-message-pool.cpp
   fabric.cpp
-  ihr-message.cpp
   liteserver.cpp
   message-queue.cpp
   out-msg-queue-proof.cpp
@@ -15,6 +15,7 @@ set(TON_VALIDATOR_SOURCE
   shard.cpp
   top-shard-descr.cpp
   validate-query.cpp
+  ../downloaders/wait-block-data-proof.cpp
 
   accept-block.hpp
   block.hpp
@@ -22,8 +23,9 @@ set(TON_VALIDATOR_SOURCE
   collator-impl.h
   config.hpp
   external-message.hpp
+  ext-message-checker.hpp
   ext-message-pool.hpp
-  ihr-message.hpp
+  expiry-ordered-list.hpp
   liteserver.hpp
   liteserver-cache.hpp
   message-queue.hpp
@@ -43,4 +45,4 @@ target_include_directories(ton_validator PUBLIC
 )
 
 target_link_libraries(ton_validator PRIVATE tdutils tdactor adnl tl_api tl_lite_api tl-lite-utils dht tdfec
-  overlay validatorsession ton_crypto ton_block)
+  overlay ton_crypto ton_block)

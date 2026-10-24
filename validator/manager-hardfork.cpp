@@ -43,9 +43,9 @@ void ValidatorManagerImpl::sync_complete(td::Promise<td::Unit> promise) {
 
   std::vector<BlockIdExt> prev{block_id};
 
-  auto P = td::PromiseCreator::lambda([SelfId = actor_id(this)](td::Result<BlockCandidate> R) {
+  auto P = td::PromiseCreator::lambda([SelfId = actor_id(this)](td::Result<GeneratedCandidate> R) {
     if (R.is_ok()) {
-      auto v = R.move_as_ok();
+      auto v = std::move(R.ok_ref().candidate);
       LOG(ERROR) << "created block " << v.id;
       td::actor::send_closure(SelfId, &ValidatorManagerImpl::created_candidate, std::move(v));
     } else {
@@ -174,13 +174,6 @@ td::actor::Task<> ValidatorManagerImpl::new_external_message_broadcast(td::Buffe
   auto msg = co_await create_ext_message(std::move(data), block::SizeLimitsConfig::ExtMsgLimits());
   ext_messages_.emplace_back(std::move(msg));
   co_return td::Unit{};
-}
-
-void ValidatorManagerImpl::new_ihr_message(td::BufferSlice data) {
-  auto R = create_ihr_message(std::move(data));
-  if (R.is_ok()) {
-    ihr_messages_.emplace_back(R.move_as_ok());
-  }
 }
 
 void ValidatorManagerImpl::wait_block_state(BlockHandle handle, td::uint32 priority, td::Timestamp timeout,
@@ -389,10 +382,6 @@ void ValidatorManagerImpl::get_external_messages(ShardIdFull shard, std::unique_
     };
     task(ext_messages_, std::move(callback)).start().detach();
   }
-}
-
-void ValidatorManagerImpl::get_ihr_messages(ShardIdFull shard, td::Promise<std::vector<td::Ref<IhrMessage>>> promise) {
-  promise.set_result(ihr_messages_);
 }
 
 void ValidatorManagerImpl::get_shard_blocks_for_collator(

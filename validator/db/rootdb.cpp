@@ -27,6 +27,9 @@
 #include "archiver.hpp"
 #include "rootdb.hpp"
 
+// Defined here (validator-db) so every flavour of the validator library gets it.
+DEFINE_LOG_CATEGORY(validator, VERBOSITY_NAME(INFO))
+
 namespace ton {
 
 namespace validator {
@@ -295,6 +298,10 @@ void RootDb::get_cell_db_reader(td::Promise<std::shared_ptr<vm::CellDbReader>> p
   td::actor::send_closure(cell_db_, &CellDb::get_cell_db_reader, std::move(promise));
 }
 
+void RootDb::get_cell_from_cell_db(td::Bits256 hash, td::Promise<td::Ref<vm::DataCell>> promise) {
+  td::actor::send_closure(cell_db_, &CellDb::load_cell, hash, std::move(promise));
+}
+
 void RootDb::store_persistent_state_file(BlockIdExt block_id, BlockIdExt masterchain_block_id, PersistentStateType type,
                                          td::BufferSlice state, td::Promise<td::Unit> promise) {
   td::actor::send_closure(archive_db_, &ArchiveManager::add_persistent_state, block_id, masterchain_block_id, type,
@@ -394,16 +401,6 @@ void RootDb::get_shard_client_state(td::Promise<BlockIdExt> promise) {
   td::actor::send_closure(state_db_, &StateDb::get_shard_client_state, std::move(promise));
 }
 
-void RootDb::update_destroyed_validator_sessions(std::vector<ValidatorSessionId> sessions,
-                                                 td::Promise<td::Unit> promise) {
-  td::actor::send_closure(state_db_, &StateDb::update_destroyed_validator_sessions, std::move(sessions),
-                          std::move(promise));
-}
-
-void RootDb::get_destroyed_validator_sessions(td::Promise<std::vector<ValidatorSessionId>> promise) {
-  td::actor::send_closure(state_db_, &StateDb::get_destroyed_validator_sessions, std::move(promise));
-}
-
 void RootDb::update_async_serializer_state(AsyncSerializerState state, td::Promise<td::Unit> promise) {
   td::actor::send_closure(state_db_, &StateDb::update_async_serializer_state, std::move(state), std::move(promise));
 }
@@ -431,7 +428,7 @@ void RootDb::archive(BlockHandle handle, td::Promise<td::Unit> promise) {
   auto [it, inserted] = archive_block_waiters_.emplace(handle->id(), std::vector<td::Promise<td::Unit>>{});
   it->second.push_back(std::move(promise));
   if (!inserted) {
-    VLOG(VALIDATOR_DEBUG) << "archive block " << handle->id().id << " : already in progress";
+    VLOG(validator, DEBUG) << "archive block " << handle->id().id << " : already in progress";
     return;
   }
   td::actor::create_actor<BlockArchiver>(

@@ -191,8 +191,6 @@ set(TLB_BLOCK_AUTO
 )
 
 set(BLOCK_SOURCE
-  block/Binlog.h
-  block/Binlog.cpp
   block/block.cpp
   block/block-db.cpp
   block/block-parse.cpp
@@ -205,8 +203,6 @@ set(BLOCK_SOURCE
   block/precompiled-smc/PrecompiledSmartContract.cpp
   ${TLB_BLOCK_AUTO}
 
-  block/block-binlog.h
-  block/block-db-impl.h
   block/block-db.h
   block/block.h
   block/block-parse.h
@@ -255,6 +251,7 @@ set(ED25519_TEST_SOURCE
 )
 
 set(TONDB_TEST_SOURCE
+  ${CMAKE_CURRENT_SOURCE_DIR}/test/test-boc-compression.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/test/test-db.cpp
   PARENT_SCOPE
 )

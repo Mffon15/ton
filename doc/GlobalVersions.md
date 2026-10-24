@@ -307,6 +307,7 @@ __Enabled in mainnet on 2026-04-03__
   - Top shard block (in masterchain)
 
 ## Version 14
+__Enabled in mainnet on 2026-06-05__
 
 ### TVM changes
 - `SENDMSG` no longer uses user-provided `fwd_fee` / `ihr_fee` as a lower bound for the returned fee estimate of an internal message. This aligns the compute-phase estimate with action-phase behavior, which has been ignoring those fields since version 8 (`disable_custom_fess`). Previously a large `fwd_fee` written into the message cell could inflate the value returned by `SENDMSG` (and its estimate-only mode `+1024`) arbitrarily, while the action phase still charged only the recomputed network price.
@@ -319,3 +320,42 @@ __Enabled in mainnet on 2026-04-03__
 
 ### Transaction changes
 - When the action phase fails with bounce-on-fail, bounce now returns the whole remaining message balance before action phase.
+
+## Version 15
+__Enabled in mainnet on 2026-07-23__
+
+### Transaction changes
+- Libraries:
+  - "Change library" action can only be performed by governance contracts.
+  - Private libraries cannot be added and are not used in TVM library context.
+  - Account cannot be deployed with non-null libraries dict.
+- When action phase fails, action fine is now collected for all successful messages as well.
+- Total bits/cells in outgoing messages of a transaction are now limited to `5242880`/`20480` (configured in `ConfigParam 43`).
+
+## Version 16
+
+### Transaction changes
+- Fixed not being able to unfreeze accounts with non-zero fixed prefix length.
+
+### Other changes
+- Added total message value to dispatch queue augmentation data.
+- Out message queue in a shard is now limited in size.
+  - This is controlled by `out_msg_queue_size_hard_limit` (default `18000`) and `out_msg_queue_size_soft_limit`
+    (default `12000`) in `ConfigParam 43`.
+  - Queue size in a shard may never exceed hard limit (unless it was already exceeded when version 16 was enabled or
+    after forced merge). This is achieved by sending all excess messages to the dispatch queue.
+  - When queue size in the previous state exceeds soft limit, validation allows deferring all messages (including
+    first message in a transaction and messages from governance accounts).
+    - Note: processing dispatch queue before internal messages is already not required when queue size exceeds
+      `defer_out_queue_size_limit` (default `256`).
+  - When queue size exceeds `hard_limit / 2`, shard cannot be `want_merge` (and, therefore, cannot merge unless shard
+    depth exceeds `max_split`).
+  - Note: `hard_limit` and `soft_limit` should be set with enough gap between them so that one block cannot exceed
+    hard limit when soft limit was not reached in the previous state.
+- New format for proofs in collated data.
+
+## Version 17
+
+### Other changes
+- Masterchain validators check global balance of grams in the blockchain.
+  - The value is stored to `global_balance.grams` in `McStateExtra`.

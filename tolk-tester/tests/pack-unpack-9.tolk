@@ -170,8 +170,8 @@ fun test7() {
 fun test8() {
     var arr: ArrayOfLotsCoins = [
         { nums: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0) },
-        { nums: (ton("10"), ton("10"), ton("10"), ton("10"), ton("10"), ton("10"), ton("10"), ton("10"), ton("10"), ton("10")) },
-        { nums: (0, 0, 0, 0, 0, 0, 0, 0, 0, ton("0.05")) },
+        { nums: (grams("10"), grams("10"), grams("10"), grams("10"), grams("10"), grams("10"), grams("10"), grams("10"), grams("10"), grams("10")) },
+        { nums: (0, 0, 0, 0, 0, 0, 0, 0, 0, grams("0.05")) },
     ];
     arr = ArrayOfLotsCoins.fromCell(arr.toCell());
     return (
@@ -190,7 +190,7 @@ fun test9() {
         createEmptySlice(),
         array<int32> [1,2].toCell().beginParse(),
         "hello".literalSlice(),
-        array<(coins, coins, coins, coins, cell)> [(0,ton("0.05"),0,0,createEmptyCell()), (1,1,1,1,createEmptyCell()), (2,2,2,2,createEmptyCell())].toCell().beginParse(),
+        array<(coins, coins, coins, coins, cell)> [(0,grams("0.05"),0,0,createEmptyCell()), (1,1,1,1,createEmptyCell()), (2,2,2,2,createEmptyCell())].toCell().beginParse(),
     ];
     var back = array<RemainingBitsAndRefs>.fromCell(a1.toCell());
     var last = array<(coins, coins, coins, coins, cell)>.fromSlice(back.last());
@@ -394,6 +394,32 @@ fun test18() {
     return list.toCell().load().calculateSize();
 }
 
+type ShiftedUint8 = uint8
+
+fun ShiftedUint8.packToBuilder(self, mutate b: builder) {
+    b.storeUint(self + 1, 8);
+}
+
+fun ShiftedUint8.unpackFromSlice(mutate s: slice): ShiftedUint8 {
+    return (s.loadUint(8) - 1) as ShiftedUint8;
+}
+
+fun makeCellWithRawSix(): cell {
+    return beginCell()
+        .storeRef(beginCell().storeRef(createEmptyCell()).storeUint(6, 8).endCell())
+        .endCell();
+}
+
+@method_id(119)
+fun test19() {
+    val c = makeCellWithRawSix();
+    val asShifted = lisp_list<ShiftedUint8>.fromCell(c).getHead();
+    val asRaw = lisp_list<uint8>.fromCell(c).getHead();
+    val c2 = makeCellWithRawSix();
+    val asRawFirst = lisp_list<uint8>.fromCell(c2).getHead();
+    val asShiftedAfter = lisp_list<ShiftedUint8>.fromCell(c2).getHead();
+    return (asShifted, asRaw, asRawFirst, asShiftedAfter);
+}
 
 fun main() {
     return (
@@ -424,4 +450,5 @@ fun main() {
 @testcase | 116 |     | 2 [ 3 (null) ] [ 4 (null) ]
 @testcase | 117 |     | -1 (null) 0 5 18792
 @testcase | 118 |     | 3
+@testcase | 119 |     | 5 6 6 5
  */

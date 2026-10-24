@@ -64,6 +64,7 @@ class RootDb : public Db {
   void store_block_state_part(BlockId effective_block, td::Ref<vm::Cell> cell,
                               td::Promise<td::Ref<vm::DataCell>> promise) override;
   void get_cell_db_reader(td::Promise<std::shared_ptr<vm::CellDbReader>> promise) override;
+  void get_cell_from_cell_db(td::Bits256 hash, td::Promise<td::Ref<vm::DataCell>> promise) override;
 
   void store_block_handle(BlockHandle handle, td::Promise<td::Unit> promise) override;
   void get_block_handle(BlockIdExt id, td::Promise<BlockHandle> promise) override;
@@ -104,10 +105,6 @@ class RootDb : public Db {
 
   void update_shard_client_state(BlockIdExt masterchain_block_id, td::Promise<td::Unit> promise) override;
   void get_shard_client_state(td::Promise<BlockIdExt> promise) override;
-
-  void update_destroyed_validator_sessions(std::vector<ValidatorSessionId> sessions,
-                                           td::Promise<td::Unit> promise) override;
-  void get_destroyed_validator_sessions(td::Promise<std::vector<ValidatorSessionId>> promise) override;
 
   void update_async_serializer_state(AsyncSerializerState state, td::Promise<td::Unit> promise) override;
   void get_async_serializer_state(td::Promise<AsyncSerializerState> promise) override;

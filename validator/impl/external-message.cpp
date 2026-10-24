@@ -128,43 +128,84 @@ td::Result<Ref<ExtMessageQ>> ExtMessageQ::create_ext_message(td::BufferSlice dat
   return Ref<ExtMessageQ>{true, std::move(data), std::move(ext_msg), dest_prefix, wc, addr, hash, hash_norm};
 }
 
-td::Status ExtMessageQ::run_message_on_account(ton::WorkchainId wc, block::Account* acc, UnixTime utime, LogicalTime lt,
-                                               td::Ref<vm::Cell> msg_root, std::unique_ptr<block::ConfigInfo> config) {
-  Ref<vm::Cell> old_mparams;
-  std::vector<block::StoragePrices> storage_prices_;
-  block::StoragePhaseConfig storage_phase_cfg_{&storage_prices_};
-  td::BitArray<256> rand_seed_;
-  block::ComputePhaseConfig compute_phase_cfg_;
-  block::ActionPhaseConfig action_phase_cfg_;
-  block::SerializeConfig serialize_config_;
-  td::RefInt256 masterchain_create_fee, basechain_create_fee;
+td::Result<Ref<ExtMessageQ>> ExtMessageQ::create_ext_message(Ref<vm::Cell> root) {
+  vm::CellSlice cs{vm::NoVmOrd{}, root};
+  if (cs.prefetch_ulong(2) != 2) {
+    return td::Status::Error("external message must begin with ext_in_msg_info$10");
+  }
+  ton::Bits256 hash{root->get_hash().bits()};
+  block::gen::CommonMsgInfo::Record_ext_in_msg_info info;
+  if (!tlb::unpack_cell_inexact(root, info)) {
+    return td::Status::Error("cannot unpack external message header");
+  }
+  auto dest_prefix = block::tlb::t_MsgAddressInt.get_prefix(info.dest);
+  if (!dest_prefix.is_valid()) {
+    return td::Status::Error("destination of an inbound external message is an invalid blockchain address");
+  }
+  ton::StdSmcAddress addr;
+  ton::WorkchainId wc;
+  if (!block::tlb::t_MsgAddressInt.extract_std_address(info.dest, wc, addr)) {
+    return td::Status::Error(PSLICE() << "Can't parse destination address");
+  }
+  TRY_RESULT(hash_norm, get_ext_in_msg_hash_norm(root));
+  TRY_RESULT(data, vm::std_boc_serialize(root));
+  return Ref<ExtMessageQ>{true, std::move(data), std::move(root), dest_prefix, wc, addr, hash, hash_norm};
+}
 
+td::Result<std::unique_ptr<ExtMessageQ::ExecutionConfig>> ExtMessageQ::ExecutionConfig::create(
+    const block::ConfigInfo& config, ton::WorkchainId wc, UnixTime utime, bool with_vm_log) {
+  auto exec_config = std::make_unique<ExecutionConfig>();
   auto fetch_res = block::FetchConfigParams::fetch_config_params(
-      *config, &old_mparams, &storage_prices_, &storage_phase_cfg_, &rand_seed_, &compute_phase_cfg_,
-      &action_phase_cfg_, &serialize_config_, &masterchain_create_fee, &basechain_create_fee, wc, utime);
+      config, &exec_config->old_mparams, &exec_config->storage_prices, &exec_config->storage_phase_cfg,
+      &exec_config->rand_seed, &exec_config->compute_phase_cfg, &exec_config->action_phase_cfg,
+      &exec_config->serialize_config, &exec_config->masterchain_create_fee, &exec_config->basechain_create_fee, wc,
+      utime);
   if (fetch_res.is_error()) {
     auto error = fetch_res.move_as_error();
     LOG(DEBUG) << "Cannot fetch config params: " << error.message();
     return error.move_as_error_prefix("External message was not accepted: cannot fetch config params: ");
   }
-  compute_phase_cfg_.libraries = std::make_unique<vm::Dictionary>(config->get_libraries_root(), 256);
-  compute_phase_cfg_.with_vm_log = true;
-  compute_phase_cfg_.stop_on_accept_message = true;
+  exec_config->compute_phase_cfg.libraries = std::make_unique<vm::Dictionary>(config.get_libraries_root(), 256);
+  exec_config->compute_phase_cfg.with_vm_log = with_vm_log;
+  exec_config->compute_phase_cfg.stop_on_accept_message = true;
+  return std::move(exec_config);
+}
 
-  auto res =
-      Collator::impl_create_ordinary_transaction(msg_root, acc, utime, lt, &storage_phase_cfg_, &compute_phase_cfg_,
-                                                 &action_phase_cfg_, &serialize_config_, true, lt);
-  if (res.is_error()) {
-    auto error = res.move_as_error();
-    LOG(DEBUG) << "Cannot run message on account: " << error.message();
-    return error.move_as_error_prefix("External message was not accepted: cannot run message on account: ");
+td::Status ExtMessageQ::run_message_on_account(ton::WorkchainId wc, block::Account* acc, UnixTime utime, LogicalTime lt,
+                                               td::Ref<vm::Cell> msg_root, const block::ConfigInfo& config) {
+  TRY_RESULT(exec_config, ExecutionConfig::create(config, wc, utime, /* with_vm_log = */ true));
+  return run_message_on_account(wc, acc, utime, lt, std::move(msg_root), *exec_config);
+}
+
+td::Status ExtMessageQ::run_message_on_account(ton::WorkchainId wc, block::Account* acc, UnixTime utime, LogicalTime lt,
+                                               td::Ref<vm::Cell> msg_root, ExecutionConfig& exec_config) {
+  // Same as Collator::impl_create_ordinary_transaction, but only up to prepare_compute_phase
+  using namespace std::literals::string_literals;
+  if (acc->last_trans_end_lt_ >= lt && acc->transactions.empty()) {
+    return td::Status::Error(-669, PSTRING() << "last transaction time in the state of account " << acc->workchain
+                                             << ":" << acc->addr.to_hex() << " is too large");
   }
-  std::unique_ptr<block::transaction::Transaction> trans = res.move_as_ok();
-
-  auto trans_root = trans->commit(*acc);
-  if (trans_root.is_null()) {
-    LOG(DEBUG) << "Cannot commit new transaction for smart contract";
-    return td::Status::Error("External message was not accepted: cannot commit new transaction for smart contract");
+  std::unique_ptr<block::transaction::Transaction> trans = std::make_unique<block::transaction::Transaction>(
+      *acc, block::transaction::Transaction::tr_ord, lt + 1, utime, msg_root);
+  if (!trans->unpack_input_msg(false, &exec_config.action_phase_cfg)) {
+    return td::Status::Error(-701, "inbound external message rejected by account "s + acc->addr.to_hex() +
+                                       " before smart-contract execution");
+  }
+  if (!trans->prepare_storage_phase(exec_config.storage_phase_cfg, true, true)) {
+    return td::Status::Error(
+        -669, "cannot create storage phase of a new transaction for smart contract "s + acc->addr.to_hex());
+  }
+  if (!trans->prepare_compute_phase(exec_config.compute_phase_cfg)) {
+    return td::Status::Error(
+        -669, "cannot create compute phase of a new transaction for smart contract "s + acc->addr.to_hex());
+  }
+  if (!trans->compute_phase->accepted) {
+    // inbound external message was not accepted
+    const auto& cp = *trans->compute_phase;
+    return td::Status::Error(
+        -701, PSLICE() << "inbound external message rejected by transaction " << acc->addr.to_hex() << ":\n"
+                       << "exitcode=" << cp.exit_code << ", steps=" << cp.vm_steps << ", gas_used=" << cp.gas_used
+                       << (cp.vm_log.empty() ? "" : "\nVM Log (truncated):\n..." + cp.vm_log));
   }
   return td::Status::OK();
 }

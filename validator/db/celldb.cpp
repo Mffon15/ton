@@ -140,6 +140,13 @@ void CellDbIn::validate_meta() {
     LOG_IF(ERROR, cell.is_error()) << "Cannot load root from meta: " << entry.block_id << " " << cell.error();
   }
 
+  static bool tontester_mode = []() -> bool {
+    const char* s = std::getenv("TON_TONTESTER");
+    return s != nullptr && !strcmp(s, "1");
+  }();
+  if (tontester_mode) {
+    return;
+  }
   // load_known_roots is only supported by InMemory database, so it is ok to check all known roots here
   auto known_roots = boc_->load_known_roots().move_as_ok();
   for (auto& root : known_roots) {
@@ -524,9 +531,12 @@ void CellDbIn::store_block_state_from_data(td::Ref<BlockData> block, td::Promise
   vm::StoreCellHint hint;
   Ref<vm::Cell> new_root;
   if (opts_->get_celldb_in_memory()) {
-    TRY_RESULT_PROMISE_ASSIGN(promise, new_root, apply_block_to_prev_states(block, std::move(prev_roots), &hint));
+    TRY_RESULT_PROMISE_PREFIX_ASSIGN(promise, new_root, apply_block_to_prev_states(block, std::move(prev_roots), &hint),
+                                     "apply block to prev states: ");
   } else {
-    new_root = build_next_state(block, *boc_->get_cell_db_reader(), std::move(prev_roots), &hint);
+    TRY_RESULT_PROMISE_PREFIX_ASSIGN(promise, new_root,
+                                     build_next_state(block, *boc_->get_cell_db_reader(), std::move(prev_roots), &hint),
+                                     "build next state: ");
   }
   store_cell(block->block_id(), std::move(new_root), std::move(hint), std::move(promise));
 }
@@ -755,7 +765,7 @@ void CellDbIn::gc_cont(BlockIdExt block_id, td::Result<BlockHandle> R) {
   if (R.is_ok()) {
     auto handle = R.move_as_ok();
     if (!handle->inited_state_boc()) {
-      LOG(WARNING) << "inited_state_boc=false, but state in db. blockid=" << block_id;
+      LOG(DEBUG) << "inited_state_boc=false, but state in db. blockid=" << block_id;
     }
     handle->set_deleted_state_boc();
     td::actor::send_closure(root_db_, &RootDb::store_block_handle, handle,
@@ -764,7 +774,7 @@ void CellDbIn::gc_cont(BlockIdExt block_id, td::Result<BlockHandle> R) {
                               td::actor::send_closure(SelfId, &CellDbIn::gc_cont2, block_id);
                             });
   } else {
-    LOG(WARNING) << "handle not found, but state in db. blockid=" << block_id;
+    LOG(DEBUG) << "handle not found, but state in db. blockid=" << block_id;
     gc_cont2(block_id);
   }
 }

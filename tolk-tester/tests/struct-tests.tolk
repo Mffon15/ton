@@ -91,15 +91,15 @@ fun test1() {
 
 @method_id(102)
 fun test2() {
-    var i1 = JustIntAlias2 { value: 1 };
-    var i2: JustInt = JustIntAlias2 { value: 2, };
+    var i1 = JustInt { value: 1 };
+    var i2: JustInt = JustInt { value: 2, };
     var i3: JustIntAlias2 = { `value`: 3 };
     __expect_type(i1.value, "int");
     __expect_type(i1.value + i2.value + i3.value, "int");
     __expect_type(i3, "JustIntAlias2");
-    __expect_type([i2, i3], "array<JustInt>");
+    __expect_type(array<JustInt> [i2, i3], "array<JustInt>");
     __expect_type([i2] as [JustIntAlias], "[JustIntAlias]");
-    return (i1, i2, i3, [i1, JustIntAlias{value:5}]);
+    return (i1, i2, i3, [i1, JustInt{value:5}]);
 }
 
 @method_id(103)
@@ -120,7 +120,7 @@ fun test4() {
 
 @method_id(105)
 fun test5() {
-    var b = PointAlias { y: 20, x: 10 };
+    var b = Point { y: 20, x: 10 };
     var p: PointAlias = Point { x: b.x, y: b.y };
     p.x += 5;
     return (sumCoords(p), p.y += 10, p.sumCoords());
@@ -172,7 +172,7 @@ fun test8() {
     __expect_type(o6, "OuterEmpty");
     __expect_type(o8, "OuterEmpty?");
     __expect_type(EmptyGeneric2<slice>{}, "EmptyGeneric2<slice>");
-    return (e1, Empty{}, EmptyAlias{}, o2, o1, 777, o3, 777, o4, 777, o5, 777, o6, 777, o7, 777, o8, 777, o3!, 777);
+    return (e1, Empty{}, Empty{}, o2, o1, 777, o3, 777, o4, 777, o5, 777, o6, 777, o7, 777, o8, 777, o3!, 777);
 }
 
 fun maxCoord(p: Point): int8 {
@@ -347,10 +347,10 @@ fun test22(x: JustInt) {
 
 @method_id(123)
 fun test23(p: Point) {
-    var complex = p as Point | (JustInt | Storage);
+    var complex = p as PointAlias | (JustInt | Storage);
     return match (complex) {
         JustInt => 10 * complex.value,
-        PointAlias => 20,
+        Point => 20,
         Storage => 30 + complex.lastPoint.x,
     };
 }
@@ -508,8 +508,8 @@ fun test34() {
     return o1;
 }
 
-@pure @noinline fun getXPure() { return 1; }
-@pure @noinline fun getYPure() { return 2; }
+@noinline fun getX1() { return 1; }
+@noinline fun getY2() { return 2; }
 global t_impure: tuple;
 @noinline fun getXImpure() { t_impure.push(1); return 1; }
 @noinline fun getYImpure() { t_impure.push(2); return 2; }
@@ -517,8 +517,8 @@ global t_impure: tuple;
 @method_id(135)
 fun test35() {
     var p: Point = {
-        y: getYPure(),
-        x: getXPure(),
+        y: getY2(),
+        x: getX1(),
     };
     return p;
 }
@@ -687,7 +687,7 @@ fun test50(p1set: bool, p2set: bool) {
 
 
 fun main(x: int8, y: MInt) {
-    __expect_type(PointAlias{x,y}, "Point");
+    __expect_type(Point{x,y} as PointAlias, "PointAlias");
     __expect_type(Point{x,y} as Point, "Point");
     __expect_type(test3(), "Point");
     __expect_type(maxCoord, "(Point) -> int8");
@@ -789,9 +789,10 @@ type PointAlias = Point;
 
 @fif_codegen
 """
-  test35() PROC:<{              //
-    getXPure() CALLDICT         //  '0
-    getYPure() CALLDICT         //  p.x p.y
+  test35() PROC:<{
+    getY2() CALLDICT
+    getX1() CALLDICT
+    SWAP
   }>
 """
 

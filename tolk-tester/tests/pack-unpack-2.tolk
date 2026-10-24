@@ -218,7 +218,7 @@ struct IntAndMaybeMaybe8 {
 */
 
 struct SomeBytesFields {
-    f1: bytes1;
+    f1: bits8;
     f2: bits3;
     f3: bits20?;
     f4: bits100 | bits200;
@@ -575,8 +575,8 @@ fun test_IntAndEitherMaybe8Or256() {
 
 @method_id(213)
 fun test_SomeBytesFields() {
-    run<SomeBytesFields>({ f1: stringHexToSlice("A4") as bytes1, f2: stringHexToSlice("7_") as bits3, f3: null, f4: stringHexToSlice("BBA87684B3DAA58C0FCC75230C4302C9D156102139D631FF56") as bits200 }, stringHexToSlice("A46DDD43B4259ED52C607E63A9186218164E8AB08109CEB18FFAB4_"));
-    run<SomeBytesFields>({ f1: stringHexToSlice("E6") as bytes1, f2: stringHexToSlice("D_") as bits3, f3: stringHexToSlice("2531C") as bits20, f4: stringHexToSlice("927E88FAB2D327D9468547217") as bits100 }, stringHexToSlice("E6D2531C493F447D596993ECA342A390BC_"));
+    run<SomeBytesFields>({ f1: stringHexToSlice("A4") as bits8, f2: stringHexToSlice("7_") as bits3, f3: null, f4: stringHexToSlice("BBA87684B3DAA58C0FCC75230C4302C9D156102139D631FF56") as bits200 }, stringHexToSlice("A46DDD43B4259ED52C607E63A9186218164E8AB08109CEB18FFAB4_"));
+    run<SomeBytesFields>({ f1: stringHexToSlice("E6") as bits8, f2: stringHexToSlice("D_") as bits3, f3: stringHexToSlice("2531C") as bits20, f4: stringHexToSlice("927E88FAB2D327D9468547217") as bits100 }, stringHexToSlice("E6D2531C493F447D596993ECA342A390BC_"));
     return SomeBytesFields.fromSlice(stringHexToSlice("E6D2531C493F447D596993ECA342A390BC_")).f4 is bits100;
 }
 
@@ -724,7 +724,7 @@ fun test_RestIsBuilderOrRemaining() {
         .storeRef(JustAddress { addr: address("9:527964d55cfa6eb731f4bfc07e9d025098097ef8505519e853986279bd8400d8") }.toCell());
     var w: ReadWriteRest<builder> = {
         f1: 60,
-        f2: ton("0.05"),
+        f2: grams("0.05"),
         rest: remainingB
     };
     var r: ReadRest_Remaining = w.toCell().beginParse().loadAny();
@@ -739,7 +739,7 @@ fun test_MidIsBuilderOrBitsN() {
     var typedCell = ReadWriteMid {
         f1: 5,
         mid: bits40_b,
-        f3: ton("0.05")
+        f3: grams("0.05")
     }.toCell();
     __expect_type(typedCell, "Cell<ReadWriteMid<builder>>");
     var r = ReadWriteMid<bits40>.fromCell(typedCell);

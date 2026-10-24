@@ -27,6 +27,7 @@ struct TotalValidatorSet;
 class ValidatorSet : public td::CntObject {
  public:
   const ton::ValidatorDescr* get_validator(const ton::NodeIdShort& id) const;
+  std::pair<const ton::ValidatorDescr*, td::uint32> get_validator_with_idx(const ton::NodeIdShort& id) const;
   bool is_validator(ton::NodeIdShort id) const;
   ton::CatchainSeqno get_catchain_seqno() const {
     return cc_seqno_;
@@ -39,6 +40,9 @@ class ValidatorSet : public td::CntObject {
   }
   ton::ValidatorWeight get_total_weight() const {
     return total_weight_;
+  }
+  size_t size() const {
+    return ids_.size();
   }
   std::vector<ton::ValidatorDescr> export_vector() const;
   ValidatorSet* make_copy() const override;
@@ -55,7 +59,7 @@ class ValidatorSet : public td::CntObject {
 
 class ValidatorSetCompute {
  public:
-  td::Ref<ValidatorSet> get_validator_set(ton::ShardIdFull shard, ton::UnixTime utime, ton::CatchainSeqno cc) const;
+  td::Ref<ValidatorSet> get_validator_set(ton::ShardIdFull shard, ton::CatchainSeqno cc) const;
   td::Ref<ValidatorSet> get_next_validator_set(ton::ShardIdFull shard, ton::UnixTime utime,
                                                ton::CatchainSeqno cc) const;
   td::Status init(const Config* config);
@@ -64,7 +68,7 @@ class ValidatorSetCompute {
  private:
   const Config* config_{nullptr};
   std::shared_ptr<TotalValidatorSet> cur_validators_, next_validators_;
-  td::Ref<ValidatorSet> compute_validator_set(ton::ShardIdFull shard, const TotalValidatorSet& vset, ton::UnixTime time,
+  td::Ref<ValidatorSet> compute_validator_set(ton::ShardIdFull shard, const TotalValidatorSet& vset,
                                               ton::CatchainSeqno cc_seqno) const;
 };
 

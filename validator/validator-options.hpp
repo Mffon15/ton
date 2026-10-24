@@ -49,9 +49,6 @@ struct ValidatorManagerOptionsImpl : public ValidatorManagerOptions {
   double state_ttl() const override {
     return state_ttl_;
   }
-  size_t max_mempool_num() const override {
-    return max_mempool_num_;
-  }
   double archive_ttl() const override {
     return archive_ttl_;
   }
@@ -89,9 +86,6 @@ struct ValidatorManagerOptionsImpl : public ValidatorManagerOptions {
   }
   std::vector<BlockIdExt> get_hardforks() const override {
     return hardforks_;
-  }
-  bool check_unsafe_resync_allowed(CatchainSeqno seqno) const override {
-    return unsafe_catchains_.count(seqno) > 0;
   }
   td::uint32 check_unsafe_catchain_rotate(BlockSeqno seqno, CatchainSeqno cc_seqno) const override {
     auto it = unsafe_catchain_rotates_.find(cc_seqno);
@@ -149,20 +143,11 @@ struct ValidatorManagerOptionsImpl : public ValidatorManagerOptions {
   bool get_unsynced_liteserver() const override {
     return unsynced_liteserver_;
   }
-  td::optional<double> get_catchain_max_block_delay() const override {
-    return catchain_max_block_delay_;
-  }
-  td::optional<double> get_catchain_max_block_delay_slow() const override {
-    return catchain_max_block_delay_slow_;
-  }
   bool get_state_serializer_enabled() const override {
     return state_serializer_enabled_;
   }
   td::Ref<CollatorOptions> get_collator_options() const override {
     return collator_options_;
-  }
-  double get_catchain_broadcast_speed_multiplier() const override {
-    return catchain_broadcast_speed_multipliers_;
   }
   bool get_permanent_celldb() const override {
     return permanent_celldb_;
@@ -191,6 +176,9 @@ struct ValidatorManagerOptionsImpl : public ValidatorManagerOptions {
     }
     return config;
   }
+  td::Ref<ExtMessagePoolOptions> get_ext_message_pool_options() const override {
+    return ext_message_pool_options_;
+  }
 
   void set_zero_block_id(BlockIdExt block_id) override {
     zero_block_id_ = block_id;
@@ -213,9 +201,6 @@ struct ValidatorManagerOptionsImpl : public ValidatorManagerOptions {
   void set_state_ttl(double value) override {
     state_ttl_ = value;
   }
-  void set_max_mempool_num(size_t value) override {
-    max_mempool_num_ = value;
-  }
   void set_archive_ttl(double value) override {
     archive_ttl_ = value;
   }
@@ -227,9 +212,6 @@ struct ValidatorManagerOptionsImpl : public ValidatorManagerOptions {
   }
   void set_hardforks(std::vector<BlockIdExt> vec) override {
     hardforks_ = std::move(vec);
-  }
-  void add_unsafe_resync_catchain(CatchainSeqno seqno) override {
-    unsafe_catchains_.insert(seqno);
   }
   void add_unsafe_catchain_rotate(BlockSeqno seqno, CatchainSeqno cc_seqno, td::uint32 value) override {
     VLOG(INFO) << "Add unsafe catchain rotation: Master block seqno " << seqno << " Catchain seqno " << cc_seqno
@@ -281,20 +263,11 @@ struct ValidatorManagerOptionsImpl : public ValidatorManagerOptions {
   void set_unsynced_liteserver(bool value) override {
     unsynced_liteserver_ = value;
   }
-  void set_catchain_max_block_delay(double value) override {
-    catchain_max_block_delay_ = value;
-  }
-  void set_catchain_max_block_delay_slow(double value) override {
-    catchain_max_block_delay_slow_ = value;
-  }
   void set_state_serializer_enabled(bool value) override {
     state_serializer_enabled_ = value;
   }
   void set_collator_options(td::Ref<CollatorOptions> value) override {
     collator_options_ = std::move(value);
-  }
-  void set_catchain_broadcast_speed_multiplier(double value) override {
-    catchain_broadcast_speed_multipliers_ = value;
   }
   void set_permanent_celldb(bool value) override {
     permanent_celldb_ = value;
@@ -325,21 +298,23 @@ struct ValidatorManagerOptionsImpl : public ValidatorManagerOptions {
   void set_noncritical_params_overrides(std::vector<NoncriticalParamsOverride> value) override {
     noncritical_params_overrides_ = std::move(value);
   }
+  void set_ext_message_pool_options(td::Ref<ExtMessagePoolOptions> value) override {
+    ext_message_pool_options_ = std::move(value);
+  }
 
   ValidatorManagerOptionsImpl* make_copy() const override {
     return new ValidatorManagerOptionsImpl(*this);
   }
 
   ValidatorManagerOptionsImpl(BlockIdExt zero_block_id, BlockIdExt init_block_id, bool allow_blockchain_init,
-                              double sync_blocks_before, double block_ttl, double state_ttl, size_t max_mempool_num,
-                              double archive_ttl, double key_proof_ttl, bool initial_sync_disabled)
+                              double sync_blocks_before, double block_ttl, double state_ttl, double archive_ttl,
+                              double key_proof_ttl, bool initial_sync_disabled)
       : zero_block_id_(zero_block_id)
       , init_block_id_(init_block_id)
       , allow_blockchain_init_(allow_blockchain_init)
       , sync_blocks_before_(sync_blocks_before)
       , block_ttl_(block_ttl)
       , state_ttl_(state_ttl)
-      , max_mempool_num_(max_mempool_num)
       , archive_ttl_(archive_ttl)
       , key_proof_ttl_(key_proof_ttl)
       , initial_sync_disabled_(initial_sync_disabled) {
@@ -353,12 +328,10 @@ struct ValidatorManagerOptionsImpl : public ValidatorManagerOptions {
   double sync_blocks_before_;
   double block_ttl_;
   double state_ttl_;
-  size_t max_mempool_num_;
   double archive_ttl_;
   double key_proof_ttl_;
   bool initial_sync_disabled_;
   std::vector<BlockIdExt> hardforks_;
-  std::set<CatchainSeqno> unsafe_catchains_;
   std::map<CatchainSeqno, std::pair<BlockSeqno, td::uint32>> unsafe_catchain_rotates_;
   BlockSeqno truncate_{0};
   BlockSeqno sync_upto_{0};
@@ -375,10 +348,8 @@ struct ValidatorManagerOptionsImpl : public ValidatorManagerOptions {
   bool celldb_v2_ = false;
   bool celldb_disable_bloom_filter_ = false;
   bool unsynced_liteserver_ = false;
-  td::optional<double> catchain_max_block_delay_, catchain_max_block_delay_slow_;
   bool state_serializer_enabled_ = true;
   td::Ref<CollatorOptions> collator_options_{true};
-  double catchain_broadcast_speed_multipliers_;
   bool permanent_celldb_ = false;
   td::Ref<CollatorsList> collators_list_{true, CollatorsList::default_list()};
   std::set<adnl::AdnlNodeIdShort> collator_node_whitelist_;
@@ -387,6 +358,7 @@ struct ValidatorManagerOptionsImpl : public ValidatorManagerOptions {
   bool parallel_validation = false;
   std::string db_event_fifo_path_;
   std::vector<NoncriticalParamsOverride> noncritical_params_overrides_;
+  td::Ref<ExtMessagePoolOptions> ext_message_pool_options_{true};
 };
 
 }  // namespace validator

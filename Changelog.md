@@ -1,3 +1,40 @@
+## 2026.10 Update
+
+1. Removed validators and collators from public overlays, improving their stability.
+2. Improved external message processing in node: configurable limits in mempool, fixed sending big messages, allowed
+   external message broadcasts in fast-sync overlays.
+3. [Global versions 16 and 17](./doc/GlobalVersions.md): global balance calculation and other changes.
+4. Optimized QUIC. RLDP2 is deprecated (it will be removed from node later).
+5. Improved metrics in node.
+6. Various other changes and stability fixes.
+
+Besides the work of the core team, this update also includes contributions from multiple bug-bounty hunters.
+
+## 2026.08 Update
+1. Added collators to Simplex protocol, allowing offloading block generation to specialized nodes.
+2. Improved metrics in node.
+3. Various stability fixes.
+
+Besides the work of the core team, this update also includes contributions from multiple bug-bounty hunters.
+
+## 2026.07 Update
+1. Improved performance of QUIC connections and public broadcasts.
+2. Added metrics for QUIC.
+3. Various stability fixes.
+
+Besides the work of the core team, this update also includes contributions from multiple bug-bounty hunters.
+
+## 2026.06 Update
+
+1. Supported adding fullnodes to fast-sync overlay, improving sync for them.
+2. Implemented new Plumtree broadcasts in public and fast-sync overlays.
+3. Improved sync for validators via changes in consensus protocol.
+4. Separate DHT server from nodes.
+5. Global version 15: restricted publishing libraries, fixed action fine collection.
+6. Various changes and updates, including removal of legacy code and unused features, better logging in node, hardening Tonlib against crashes, stability fixes.
+
+Besides the work of the core team, this update also includes contributions from multiple bug-bounty hunters.
+
 ## 2026.05 Update
 
 1. Networking improvements: sending block candidates over a dedicated block-sync overlay

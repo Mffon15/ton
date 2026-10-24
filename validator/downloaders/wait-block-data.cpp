@@ -18,6 +18,7 @@
 */
 #include "adnl/utils.hpp"
 #include "common/delay.h"
+#include "crypto/block/mc-config.h"
 #include "ton/ton-io.hpp"
 #include "vm/cells/MerkleProof.h"
 
@@ -29,6 +30,23 @@
 namespace ton {
 
 namespace validator {
+
+static td::Result<td::BufferSlice> serialize_block_proof(BlockIdExt id, td::Ref<vm::Cell> proof, bool has_signatures,
+                                                         td::Ref<vm::Cell> signatures_cell = {}) {
+  vm::CellBuilder cb;
+  td::Ref<vm::Cell> proof_cell;
+  if (!(cb.store_long_bool(0xc3, 8)               // block_proof#c3
+        && block::tlb::t_BlockIdExt.pack(cb, id)  // proof_for:BlockIdExt
+        && cb.store_ref_bool(std::move(proof))    // proof:^Cell
+        && cb.store_bool_bool(has_signatures)     // signatures:(Maybe ^BlockSignatures)
+        && (!has_signatures || cb.store_ref_bool(std::move(signatures_cell))) && cb.finalize_to(proof_cell))) {
+    return td::Status::Error("cannot serialize BlockProof");
+  }
+  if (!block::gen::t_BlockProof.validate_ref(proof_cell)) {
+    return td::Status::Error("created BlockProof failed automated consistency checks");
+  }
+  return std_boc_serialize(proof_cell, 0);
+}
 
 void WaitBlockData::alarm() {
   abort_query(td::Status::Error(ErrorCode::timeout, "timeout"));
@@ -250,39 +268,39 @@ void WaitBlockData::got_static_file(td::BufferSlice data) {
   run_hardfork_accept_block_query(handle_->id(), data_, manager_, std::move(P));
 }
 
+td::Result<td::BufferSlice> WaitBlockData::generate_proof(BlockIdExt id, td::Ref<vm::Cell> block_root,
+                                                          td::Ref<block::BlockSignatureSet> signatures,
+                                                          td::Ref<MasterchainState> state) {
+  if (!id.is_masterchain()) {
+    return td::Status::Error("cannot create proof for non-masterchain block");
+  }
+  if (signatures.is_null()) {
+    return td::Status::Error("block signatures are null");
+  }
+  if (!signatures->is_final()) {
+    return td::Status::Error("cannot create masterchain proof with non-final signatures");
+  }
+  if (state.is_null()) {
+    return td::Status::Error(ErrorCode::notready, "masterchain state is not ready");
+  }
+
+  TRY_RESULT(proof_root, generate_block_proof_root(id, std::move(block_root)));
+  TRY_RESULT(config, state->get_config_holder());
+  auto vset = config->get_validator_set(id.shard_full(), signatures->get_catchain_seqno());
+  if (vset.is_null()) {
+    return td::Status::Error(ErrorCode::notready, "failed to compute validator set for masterchain proof");
+  }
+  TRY_RESULT(signatures_cell, signatures->serialize(vset));
+  return serialize_block_proof(id, std::move(proof_root), true, std::move(signatures_cell));
+}
+
 td::Result<td::BufferSlice> WaitBlockData::generate_proof_link(BlockIdExt id, td::Ref<vm::Cell> block_root) {
   // Creating proof link. Similar to accept-block.cpp
   if (id.is_masterchain()) {
     return td::Status::Error("cannot create proof link for masterchain block");
   }
-  auto usage_tree = std::make_shared<vm::CellUsageTree>();
-  auto usage_cell = vm::UsageCell::create(block_root, usage_tree->root_ptr());
-
-  block::gen::Block::Record blk;
-  block::gen::BlockInfo::Record info;
-  block::gen::BlockExtra::Record extra;
-  block::gen::ExtBlkRef::Record mcref{};  // _ ExtBlkRef = BlkMasterInfo;
-  ShardIdFull shard;
-  if (!(tlb::unpack_cell(usage_cell, blk) && tlb::unpack_cell(blk.info, info) && !info.version &&
-        block::tlb::t_ShardIdent.unpack(info.shard.write(), shard) &&
-        block::gen::BlkPrevInfo{info.after_merge}.validate_ref(info.prev_ref) &&
-        tlb::unpack_cell(std::move(blk.extra), extra) && block::gen::t_ValueFlow.force_validate_ref(blk.value_flow) &&
-        (!info.not_master || tlb::unpack_cell(info.master_ref, mcref)))) {
-    return td::Status::Error("cannot unpack block header");
-  }
-  vm::CellSlice upd_cs{vm::NoVm(), blk.state_update};
-
-  TRY_RESULT(proof, vm::MerkleProof::generate(block_root, usage_tree.get()));
-  vm::CellBuilder cb;
-  td::Ref<vm::Cell> bs_cell;
-  if (!(cb.store_long_bool(0xc3, 8)               // block_proof#c3
-        && block::tlb::t_BlockIdExt.pack(cb, id)  // proof_for:BlockIdExt
-        && cb.store_ref_bool(std::move(proof))    // proof:^Cell
-        && cb.store_bool_bool(false)              // signatures:(Maybe ^BlockSignatures)
-        && cb.finalize_to(bs_cell))) {
-    return td::Status::Error("cannot serialize BlockProof");
-  }
-  return std_boc_serialize(bs_cell, 0);
+  TRY_RESULT(proof_root, generate_block_proof_root(id, std::move(block_root)));
+  return serialize_block_proof(id, std::move(proof_root), false);
 }
 
 }  // namespace validator

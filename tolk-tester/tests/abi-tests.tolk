@@ -66,7 +66,7 @@ fun unusedAbiThrow() {
 fun unusedAbiOutgoing() {
     createMessage({
         bounce: BounceMode.NoBounce,
-        value: ton("0.1"),
+        value: grams("0.1"),
         dest: address("0:ca6e321c7cce9ecedf0a8ca2492ec8592494aa5fb5ce0387dff96ef6af982a3e"),
         body: UnusedOutgoing {}.toCell(),
     });
@@ -75,7 +75,7 @@ fun unusedAbiOutgoing() {
 fun realSend() {
     createMessage({
         bounce: BounceMode.NoBounce,
-        value: ton("0.1"),
+        value: grams("0.1"),
         dest: address("0:ca6e321c7cce9ecedf0a8ca2492ec8592494aa5fb5ce0387dff96ef6af982a3e"),
         body: SwapMM {}.toCell(),
     });
@@ -140,6 +140,17 @@ const C: Small = 7
 struct Defaults {
     a: int = C
 }
+
+struct CalcSwapCostReply {
+    from: address
+    to: address
+    cost: coins
+}
+
+get fun calc_swap_cost(from: address): CalcSwapCostReply
+
+/// @param precision number of decimal places
+get fun pool_reserves(precision: uint8 = 9): (coins, coins);
 
 /**
 @testcase | 0 | 7 5 | 12
@@ -388,6 +399,42 @@ struct Defaults {
         }
       ]
 """
+
+@abi_json
+"""
+      "name": "calc_swap_cost",
+      "parameters": [
+        {
+          "name": "from",
+          ...
+"""
+
+@abi_json
+"""
+      "name": "pool_reserves",
+      "parameters": [
+        {
+          "name": "precision",
+          ...
+          "description": "number of decimal places",
+          "default_value": {
+            "kind": "int",
+            "v": "9"
+          }
+        }
+      ],
+"""
+
+@abi_json
+"""
+      "kind": "struct",
+      "name": "CalcSwapCostReply",
+"""
+
+@fif_codegen_avoid 86806 DECLMETHOD calc_swap_cost()
+@fif_codegen_avoid 108535 DECLMETHOD pool_reserves()
+
+@cmd_line_option --allow-empty-get-fun
 
 @abi_json_avoid UnusedOutgoing
 @abi_json_avoid ERR_UNUSED_ABI

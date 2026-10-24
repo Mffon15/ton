@@ -31,6 +31,7 @@
 #include "interfaces/persistent-state.h"
 #include "interfaces/proof.h"
 #include "interfaces/shard.h"
+#include "metrics/collectors.h"
 #include "overlay/overlays.h"
 #include "td/actor/actor.h"
 #include "td/actor/coro_task.h"
@@ -76,18 +77,22 @@ struct CollatorOptions : public td::CntObject {
   bool force_full_collated_data = false;
   // Ignore collated data size limits from block limits and catchain config
   bool ignore_collated_data_limits = false;
+
+  // Override limits from config (params 22/23)
+  // Use with caution: validate-query checks hard limits for gas and lt_delta
+  // Bytes and collated data are limited by values in ConfigParam 29
+  std::optional<block::ParamLimits> block_limits_bytes;
+  std::optional<block::ParamLimits> block_limits_gas;
+  std::optional<block::ParamLimits> block_limits_lt_delta;
+  std::optional<block::ParamLimits> block_limits_collated_data;
 };
 
 struct CollatorsList : public td::CntObject {
-  enum SelectMode { mode_random, mode_ordered, mode_round_robin };
-  struct Shard {
-    ShardIdFull shard_id;
-    SelectMode select_mode = mode_random;
-    std::vector<adnl::AdnlNodeIdShort> collators;
-    bool self_collate = false;
-  };
-  std::vector<Shard> shards;
-  bool self_collate = false;
+  std::vector<adnl::AdnlNodeIdShort> collators;
+  std::vector<adnl::AdnlNodeIdShort> register_collators;
+
+  // disable_self_collate exists primarily for testing. It is not expected to be set in production.
+  bool disable_self_collate = false;
 
   td::Status unpack(const ton_api::engine_validator_collatorsList& obj);
   static CollatorsList default_list();
@@ -133,6 +138,21 @@ struct NoncriticalParamsOverride {
   }
 };
 
+struct ExtMessagePoolOptions : public td::CntObject {
+  size_t max_mempool_messages = 999999;
+  // Total checkers = num_regular_checkers + num_priority_checkers
+  size_t num_regular_checkers = 24, num_priority_checkers = 0;
+  // Absolute bound on queued admission requests; the effective bound is adaptive
+  // (max_admission_waiters() targets MAX_ADMISSION_QUEUE_DELAY of estimated wait).
+  size_t max_admission_waiters = 50000;
+  size_t max_ext_msg_per_addr = 10 * 3;
+  double max_ext_msg_per_addr_time_window = 10.0;
+
+  int local_ls_message_priority = 0;
+
+  static td::Result<td::Ref<ExtMessagePoolOptions>> unpack(const ton_api::engine_validator_extMessagePoolConfig& f);
+};
+
 struct ValidatorManagerOptions : public td::CntObject {
  public:
   virtual BlockIdExt zero_block_id() const = 0;
@@ -142,7 +162,6 @@ struct ValidatorManagerOptions : public td::CntObject {
   virtual double sync_blocks_before() const = 0;
   virtual double block_ttl() const = 0;
   virtual double state_ttl() const = 0;
-  virtual size_t max_mempool_num() const = 0;
   virtual double archive_ttl() const = 0;
   virtual double key_proof_ttl() const = 0;
   virtual bool initial_sync_disabled() const = 0;
@@ -154,7 +173,6 @@ struct ValidatorManagerOptions : public td::CntObject {
   virtual td::uint32 key_block_utime_step() const {
     return 86400;
   }
-  virtual bool check_unsafe_resync_allowed(CatchainSeqno seqno) const = 0;
   virtual td::uint32 check_unsafe_catchain_rotate(BlockSeqno seqno, CatchainSeqno cc_seqno) const = 0;
   virtual bool need_db_truncate() const = 0;
   virtual BlockSeqno get_truncate_seqno() const = 0;
@@ -172,12 +190,9 @@ struct ValidatorManagerOptions : public td::CntObject {
   virtual bool get_celldb_preload_all() const = 0;
   virtual bool get_celldb_disable_bloom_filter() const = 0;
   virtual bool get_unsynced_liteserver() const = 0;
-  virtual td::optional<double> get_catchain_max_block_delay() const = 0;
-  virtual td::optional<double> get_catchain_max_block_delay_slow() const = 0;
   virtual bool get_state_serializer_enabled() const = 0;
   virtual td::Ref<CollatorOptions> get_collator_options() const = 0;
   virtual bool get_parallel_validation() const = 0;
-  virtual double get_catchain_broadcast_speed_multiplier() const = 0;
   virtual bool get_permanent_celldb() const = 0;
   virtual td::Ref<CollatorsList> get_collators_list() const = 0;
   virtual bool check_collator_node_whitelist(adnl::AdnlNodeIdShort id) const = 0;
@@ -185,6 +200,7 @@ struct ValidatorManagerOptions : public td::CntObject {
   virtual std::string get_db_event_fifo_path() const = 0;
   virtual NewConsensusConfig::NoncriticalParams get_noncritical_params(
       ShardIdFull shard, td::uint32 cc_seqno, const NewConsensusConfig::NoncriticalParams& config) const = 0;
+  virtual td::Ref<ExtMessagePoolOptions> get_ext_message_pool_options() const = 0;
 
   virtual void set_zero_block_id(BlockIdExt block_id) = 0;
   virtual void set_init_block_id(BlockIdExt block_id) = 0;
@@ -193,12 +209,10 @@ struct ValidatorManagerOptions : public td::CntObject {
   virtual void set_sync_blocks_before(double value) = 0;
   virtual void set_block_ttl(double value) = 0;
   virtual void set_state_ttl(double value) = 0;
-  virtual void set_max_mempool_num(size_t value) = 0;
   virtual void set_archive_ttl(double value) = 0;
   virtual void set_key_proof_ttl(double value) = 0;
   virtual void set_initial_sync_disabled(bool value) = 0;
   virtual void set_hardforks(std::vector<BlockIdExt> hardforks) = 0;
-  virtual void add_unsafe_resync_catchain(CatchainSeqno seqno) = 0;
   virtual void add_unsafe_catchain_rotate(BlockSeqno seqno, CatchainSeqno cc_seqno, td::uint32 value) = 0;
   virtual void truncate_db(BlockSeqno seqno) = 0;
   virtual void set_sync_upto(BlockSeqno seqno) = 0;
@@ -215,11 +229,8 @@ struct ValidatorManagerOptions : public td::CntObject {
   virtual void set_celldb_v2(bool value) = 0;
   virtual void set_celldb_disable_bloom_filter(bool value) = 0;
   virtual void set_unsynced_liteserver(bool value) = 0;
-  virtual void set_catchain_max_block_delay(double value) = 0;
-  virtual void set_catchain_max_block_delay_slow(double value) = 0;
   virtual void set_state_serializer_enabled(bool value) = 0;
   virtual void set_collator_options(td::Ref<CollatorOptions> value) = 0;
-  virtual void set_catchain_broadcast_speed_multiplier(double value) = 0;
   virtual void set_permanent_celldb(bool value) = 0;
   virtual void set_collators_list(td::Ref<CollatorsList> list) = 0;
   virtual void set_collator_node_whitelisted_validator(adnl::AdnlNodeIdShort id, bool add) = 0;
@@ -228,12 +239,13 @@ struct ValidatorManagerOptions : public td::CntObject {
   virtual void set_parallel_validation(bool value) = 0;
   virtual void set_db_event_fifo_path(std::string value) = 0;
   virtual void set_noncritical_params_overrides(std::vector<NoncriticalParamsOverride> value) = 0;
+  virtual void set_ext_message_pool_options(td::Ref<ExtMessagePoolOptions> value) = 0;
 
   static td::Ref<ValidatorManagerOptions> create(BlockIdExt zero_block_id, BlockIdExt init_block_id,
                                                  bool allow_blockchain_init = false, double sync_blocks_before = 3600,
                                                  double block_ttl = 86400, double state_ttl = 86400,
                                                  double archive_ttl = 86400 * 7, double key_proof_ttl = 86400 * 3650,
-                                                 size_t max_mempool_num = 999999, bool initial_sync_disabled = false);
+                                                 bool initial_sync_disabled = false);
 };
 
 class ValidatorManagerInterface : public td::actor::Actor {
@@ -248,8 +260,6 @@ class ValidatorManagerInterface : public td::actor::Actor {
                                           std::set<ShardIdFull> shards_to_monitor) {
     }
 
-    virtual void send_ihr_message(AccountIdPrefixFull dst, td::BufferSlice data) {
-    }
     virtual void send_ext_message(AccountIdPrefixFull dst, td::BufferSlice data) {
     }
     virtual void send_shard_block_info(BlockIdExt block_id, CatchainSeqno cc_seqno, td::BufferSlice data) {
@@ -258,6 +268,8 @@ class ValidatorManagerInterface : public td::actor::Actor {
                                       td::BufferSlice data, int mode) {
     }
     virtual void send_broadcast(BlockBroadcast broadcast, int mode) {
+    }
+    virtual void send_block_finality_broadcast(BlockFinalityBroadcast finality, int mode) {
     }
     virtual void send_out_msg_queue_proof_broadcast(td::Ref<OutMsgQueueProofBroadcast> broadcats) {
     }
@@ -293,9 +305,7 @@ class ValidatorManagerInterface : public td::actor::Actor {
 
   virtual ~ValidatorManagerInterface() = default;
   virtual void install_callback(std::unique_ptr<Callback> new_callback, td::Promise<td::Unit> promise) = 0;
-  virtual void add_permanent_key(PublicKeyHash key, td::Promise<td::Unit> promise) = 0;
   virtual void add_temp_key(PublicKeyHash key, td::Promise<td::Unit> promise) = 0;
-  virtual void del_permanent_key(PublicKeyHash key, td::Promise<td::Unit> promise) = 0;
   virtual void del_temp_key(PublicKeyHash key, td::Promise<td::Unit> promise) = 0;
 
   virtual void validate_block_is_next_proof(BlockIdExt prev_block_id, BlockIdExt next_block_id, td::BufferSlice proof,
@@ -304,9 +314,11 @@ class ValidatorManagerInterface : public td::actor::Actor {
   virtual void validate_block_proof_link(BlockIdExt block_id, td::BufferSlice proof, td::Promise<td::Unit> promise) = 0;
   virtual void validate_block_proof_rel(BlockIdExt block_id, BlockIdExt rel_block_id, td::BufferSlice proof,
                                         td::Promise<td::Unit> promise) = 0;
-  virtual void validate_block(ReceivedBlock block, td::Promise<BlockHandle> promise) = 0;
-  virtual void new_block_broadcast(BlockBroadcast broadcast, bool signatures_checked,
-                                   td::Promise<td::Unit> promise) = 0;
+  virtual void got_next_masterchain_block(ReceivedBlock block, td::Promise<BlockHandle> promise) = 0;
+  virtual td::actor::Task<> new_block_broadcast(BlockBroadcast broadcast, bool signatures_checked,
+                                                BroadcastSource source) {
+    co_return td::Status::Error("not implemented");
+  }
   virtual void validate_block_broadcast_signatures(BlockBroadcast broadcast, td::Promise<td::Unit> promise) = 0;
 
   //virtual void create_validate_block(BlockId block, td::BufferSlice data, td::Promise<Block> promise) = 0;
@@ -350,11 +362,13 @@ class ValidatorManagerInterface : public td::actor::Actor {
   virtual td::actor::Task<> new_external_message_query(td::BufferSlice data) {
     co_return td::Status::Error("not implemented");
   }
-  virtual void new_ihr_message(td::BufferSlice data) = 0;
   virtual void new_shard_block_description_broadcast(BlockIdExt block_id, CatchainSeqno cc_seqno,
                                                      td::BufferSlice data) = 0;
   virtual td::actor::Task<> new_block_candidate_broadcast(BlockIdExt block_id, CatchainSeqno cc_seqno,
-                                                          td::BufferSlice data) {
+                                                          td::BufferSlice data, BroadcastSource source) {
+    co_return td::Unit{};
+  }
+  virtual td::actor::Task<> new_block_finality_broadcast(BlockFinalityBroadcast finality, BroadcastSource source) {
     co_return td::Unit{};
   }
 
@@ -418,18 +432,21 @@ class ValidatorManagerInterface : public td::actor::Actor {
   virtual void unregister_stats_provider(td::uint64 idx) {
   }
 
-  virtual void add_collator(adnl::AdnlNodeIdShort id, ShardIdFull shard) = 0;
-  virtual void del_collator(adnl::AdnlNodeIdShort id, ShardIdFull shard) = 0;
+  virtual void add_collator(adnl::AdnlNodeIdShort id) {
+  }
+  virtual void del_collator(adnl::AdnlNodeIdShort id) {
+  }
 
   virtual void add_out_msg_queue_proof(ShardIdFull dst_shard, td::Ref<OutMsgQueueProof> proof) {
     LOG(ERROR) << "Unimplemented add_out_msg_queu_proof - ignore broadcast";
   }
 
-  virtual void get_collation_manager_stats(
-      td::Promise<tl_object_ptr<ton_api::engine_validator_collationManagerStats>> promise) = 0;
-
   virtual void add_shard_block_retainer(adnl::AdnlNodeIdShort id) {
     LOG(ERROR) << "Unimplemented add_shard_block_retainer";
+  }
+
+  virtual td::actor::Task<> collect(metrics::Context ctx) {
+    co_return {};
   }
 };
 

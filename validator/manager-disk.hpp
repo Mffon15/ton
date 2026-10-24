@@ -41,7 +41,6 @@ class WaitBlockDataDisk;
 class ValidatorManagerImpl : public ValidatorManager {
  private:
   std::vector<td::Ref<ExtMessage>> ext_messages_;
-  std::vector<td::Ref<IhrMessage>> ihr_messages_;
   struct Compare {
     bool operator()(const td::Ref<ShardTopBlockDescription> &l, const td::Ref<ShardTopBlockDescription> &r) const {
       return l->block_id() < r->block_id();
@@ -75,13 +74,7 @@ class ValidatorManagerImpl : public ValidatorManager {
     callback_ = std::move(new_callback);
     promise.set_value(td::Unit());
   }
-  void add_permanent_key(PublicKeyHash key, td::Promise<td::Unit> promise) override {
-    UNREACHABLE();
-  }
   void add_temp_key(PublicKeyHash key, td::Promise<td::Unit> promise) override {
-    UNREACHABLE();
-  }
-  void del_permanent_key(PublicKeyHash key, td::Promise<td::Unit> promise) override {
     UNREACHABLE();
   }
   void del_temp_key(PublicKeyHash key, td::Promise<td::Unit> promise) override {
@@ -96,8 +89,7 @@ class ValidatorManagerImpl : public ValidatorManager {
                                 td::Promise<td::Unit> promise) override {
     UNREACHABLE();
   }
-  void validate_block(ReceivedBlock block, td::Promise<BlockHandle> promise) override;
-  void new_block_broadcast(BlockBroadcast broadcast, bool signatures_checked, td::Promise<td::Unit> promise) override;
+  void got_next_masterchain_block(ReceivedBlock block, td::Promise<BlockHandle> promise) override;
   void validate_block_broadcast_signatures(BlockBroadcast broadcast, td::Promise<td::Unit> promise) override;
   void wait_state_by_prev_blocks(BlockIdExt block_id, std::vector<BlockIdExt> prev_blocks,
                                  td::Promise<td::Ref<ShardState>> promise) override;
@@ -140,7 +132,6 @@ class ValidatorManagerImpl : public ValidatorManager {
   //void get_block_description(BlockIdExt block_id, td::Promise<BlockDescription> promise) override;
 
   td::actor::Task<> new_external_message_broadcast(td::BufferSlice data, int priority) override;
-  void new_ihr_message(td::BufferSlice data) override;
   void new_shard_block_description_broadcast(BlockIdExt block_id, CatchainSeqno cc_seqno,
                                              td::BufferSlice data) override;
 
@@ -161,6 +152,9 @@ class ValidatorManagerImpl : public ValidatorManager {
                                  td::Promise<td::Ref<ShardState>> promise) override;
   void set_block_state_from_data_bulk(std::vector<td::Ref<BlockData>> blocks, td::Promise<td::Unit> promise) override;
   void get_cell_db_reader(td::Promise<std::shared_ptr<vm::CellDbReader>> promise) override;
+  void get_cell_from_cell_db(td::Bits256 hash, td::Promise<td::Ref<vm::DataCell>> promise) override {
+    td::actor::send_closure(db_, &Db::get_cell_from_cell_db, hash, std::move(promise));
+  }
   void store_persistent_state_file(BlockIdExt block_id, BlockIdExt masterchain_block_id, PersistentStateType type,
                                    td::BufferSlice state, td::Promise<td::Unit> promise) override;
   void store_persistent_state_file_gen(BlockIdExt block_id, BlockIdExt masterchain_block_id, PersistentStateType type,
@@ -172,9 +166,7 @@ class ValidatorManagerImpl : public ValidatorManager {
   void wait_block_state_short(BlockIdExt block_id, td::uint32 priority, td::Timestamp timeout, bool wait_store,
                               td::Promise<td::Ref<ShardState>> promise) override;
   void wait_neighbor_msg_queue_proofs(ShardIdFull dst_shard, std::vector<BlockIdExt> blocks, td::Timestamp timeout,
-                                      td::Promise<std::map<BlockIdExt, td::Ref<OutMsgQueueProof>>> promise) override {
-    UNREACHABLE();
-  }
+                                      td::Promise<std::map<BlockIdExt, td::Ref<OutMsgQueueProof>>> promise) override;
 
   void set_block_data(BlockHandle handle, td::Ref<BlockData> data, td::Promise<td::Unit> promise) override;
   void wait_block_data(BlockHandle handle, td::uint32 priority, td::Timestamp,
@@ -212,13 +204,9 @@ class ValidatorManagerImpl : public ValidatorManager {
   void wait_block_message_queue_short(BlockIdExt id, td::uint32 priority, td::Timestamp timeout,
                                       td::Promise<td::Ref<MessageQueue>> promise) override;
   void get_external_messages(ShardIdFull shard, std::unique_ptr<ExtMsgCallback> callback) override;
-  void get_ihr_messages(ShardIdFull shard, td::Promise<std::vector<td::Ref<IhrMessage>>> promise) override;
   void get_shard_blocks_for_collator(BlockIdExt masterchain_block_id,
                                      td::Promise<std::vector<td::Ref<ShardTopBlockDescription>>> promise) override;
-  void complete_external_messages(std::vector<ExtMessage::Hash> to_delay,
-                                  std::vector<ExtMessage::Hash> to_delete) override;
   void cleanup_applied_external_messages(BlockHandle handle, td::Ref<BlockData> block) override;
-  void complete_ihr_messages(std::vector<IhrMessage::Hash> to_delay, std::vector<IhrMessage::Hash> to_delete) override;
 
   //void set_first_block(ZeroStateIdExt state, BlockIdExt block, td::Promise<td::Unit> promise) override;
   void set_next_block(BlockIdExt prev, BlockIdExt next, td::Promise<td::Unit> promise) override;
@@ -250,7 +238,6 @@ class ValidatorManagerImpl : public ValidatorManager {
   void get_last_liteserver_state_block(td::Promise<std::pair<td::Ref<MasterchainState>, BlockIdExt>> promise) override;
   void get_shard_client_state_block(td::Promise<std::pair<td::Ref<MasterchainState>, BlockIdExt>> promise) override;
 
-  void send_get_block_request(BlockIdExt id, td::uint32 priority, td::Promise<ReceivedBlock> promise) override;
   void send_get_zero_state_request(BlockIdExt id, td::uint32 priority, td::Promise<td::BufferSlice> promise) override;
   void send_get_persistent_state_request(BlockIdExt id, BlockIdExt masterchain_block_id, PersistentStateType type,
                                          td::uint32 priority, td::Promise<td::BufferSlice> promise) override;
@@ -266,11 +253,10 @@ class ValidatorManagerImpl : public ValidatorManager {
                                         td::Promise<std::vector<BlockIdExt>> promise) override {
     UNREACHABLE();
   }
-  void send_ihr_message(td::Ref<IhrMessage> message) override {
-    new_ihr_message(message->serialize());
-  }
   void send_top_shard_block_description(td::Ref<ShardTopBlockDescription> desc) override;
   void send_block_broadcast(BlockBroadcast broadcast, int mode) override {
+  }
+  void send_block_finality_broadcast(BlockFinalityBroadcast finality, int mode) override {
   }
   void send_get_out_msg_queue_proof_request(ShardIdFull dst_shard, std::vector<BlockIdExt> blocks,
                                             block::ImportedMsgQueueLimits limits,
@@ -316,7 +302,8 @@ class ValidatorManagerImpl : public ValidatorManager {
   void finished_wait_data(BlockIdExt id, td::Result<td::Ref<BlockData>> R);
 
   void start_up() override;
-  void started(ValidatorManagerInitResult result);
+  td::actor::Task<> started(ValidatorManagerInitResult result);
+  td::actor::Task<> start_up_advance_mc();
 
   void write_fake(BlockCandidate candidate, std::vector<BlockIdExt> prev, BlockIdExt last,
                   td::Ref<block::ValidatorSet> val_set);
@@ -412,18 +399,6 @@ class ValidatorManagerImpl : public ValidatorManager {
   void add_persistent_state_description(td::Ref<PersistentStateDescription> desc) override {
   }
 
-  void add_collator(adnl::AdnlNodeIdShort id, ShardIdFull shard) override {
-    UNREACHABLE();
-  }
-  void del_collator(adnl::AdnlNodeIdShort id, ShardIdFull shard) override {
-    UNREACHABLE();
-  }
-
-  void get_collation_manager_stats(
-      td::Promise<tl_object_ptr<ton_api::engine_validator_collationManagerStats>> promise) override {
-    UNREACHABLE();
-  }
-
   void update_options(td::Ref<ValidatorManagerOptions> opts) override {
     opts_ = std::move(opts);
   }
@@ -450,6 +425,8 @@ class ValidatorManagerImpl : public ValidatorManager {
   void update_shard_blocks();
   void dec_pending_new_blocks();
   ValidatorSessionId get_validator_set_id(ShardIdFull shard, td::Ref<block::ValidatorSet> val_set);
+
+  td::actor::ActorOwn<OutMsgQueueImporter> out_msg_queue_importer_;
 };
 
 }  // namespace validator

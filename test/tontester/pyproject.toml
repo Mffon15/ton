@@ -6,7 +6,10 @@ dependencies = [
     "dash",
     "plotly",
     "pytoniq-core",
+    "sortedcontainers",
+    "sortedcontainers-stubs",
     "watchfiles",
+    "requests",
 ]
 
 [project.scripts]

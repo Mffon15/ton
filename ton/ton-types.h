@@ -22,6 +22,7 @@
 #include <cinttypes>
 
 #include "crypto/common/bitstring.h"
+#include "td/utils/PersistentTreap.h"
 #include "td/utils/Slice.h"
 #include "td/utils/UInt.h"
 #include "td/utils/Variant.h"
@@ -457,23 +458,24 @@ struct BlockCandidate {
   td::BufferSlice data;
   td::BufferSlice collated_data;
 
-  // used only locally
-  std::vector<td::Ref<OutMsgQueueProofBroadcast>> out_msg_queue_proof_broadcasts = {};
-
   BlockCandidate clone() const {
-    return BlockCandidate{
-        pubkey, id, collated_file_hash, data.clone(), collated_data.clone(), out_msg_queue_proof_broadcasts};
+    return BlockCandidate{pubkey, id, collated_file_hash, data.clone(), collated_data.clone()};
   }
 };
 
 struct GeneratedCandidate {
   BlockCandidate candidate;
-  bool is_cached = false;
-  bool self_collated = false;
-  td::Bits256 collator_node_id = td::Bits256::zero();
+  // Monotonic completion time captured by the collator.
+  // Zero means an older or synthetic producer did not provide the timestamp.
+  double collated_at_monotonic = 0.0;
+  td::PersistentTreap<td::Bits256, td::Unit> processed_external_messages = {};
 
   GeneratedCandidate clone() const {
-    return {candidate.clone(), is_cached, self_collated, collator_node_id};
+    return GeneratedCandidate{
+        .candidate = candidate.clone(),
+        .collated_at_monotonic = collated_at_monotonic,
+        .processed_external_messages = processed_external_messages,
+    };
   }
 };
 
@@ -501,46 +503,28 @@ struct ValidatorDescr {
   }
 };
 
-struct CatChainOptions {
-  double idle_timeout = 16.0;
-  td::uint32 max_deps = 4;
-  td::uint32 max_serialized_block_size = 16 * 1024;
-  bool block_hash_covers_data = false;
-  // Max block height = max_block_height_coeff * (1 + N / max_deps) / 1000
-  // N - number of participants
-  // 0 - unlimited
-  td::uint64 max_block_height_coeff = 0;
-
-  bool debug_disable_db = false;
-  double broadcast_speed_multiplier = 1.0;
-};
-
-struct ValidatorSessionConfig {
-  td::uint32 proto_version = 0;
-
-  CatChainOptions catchain_opts;
-
-  td::uint32 round_candidates = 3;
-  /* double */ double next_candidate_delay = 2.0;
-  td::uint32 round_attempt_duration = 16;
-  td::uint32 max_round_attempts = 4;
-
-  td::uint32 max_block_size = (4 << 20);
-  td::uint32 max_collated_data_size = (4 << 20);
-
-  bool new_catchain_ids = false;
-  bool use_quic = false;
-
-  static const td::uint32 BLOCK_HASH_COVERS_DATA_FROM_VERSION = 2;
-};
-
 struct NewConsensusConfig {
   td::uint32 max_block_size = (4 << 20);
   td::uint32 max_collated_data_size = (4 << 20);
 
-  bool use_quic = false;
-  bool enable_observers = false;
+  td::uint32 protocol_version = 0;
   td::uint32 slots_per_leader_window = 4;
+
+  bool enable_block_sync() const {
+    return protocol_version == 1;
+  }
+
+  bool use_new_db_names() const {
+    return protocol_version >= 2;
+  }
+
+  bool observers_in_private_overlay() const {
+    return protocol_version >= 2;
+  }
+
+  bool enable_plumtree_broadcast() const {
+    return protocol_version >= 2;
+  }
 
   // When adding a new noncritical parameters, also add it to consensus.simplex.noncriticalParams TL scheme
   // clang-format off
@@ -555,11 +539,15 @@ struct NewConsensusConfig {
   duration_fn(7, candidate_resolve_cooldown, 10)                        \
   duration_fn(8, standstill_timeout, 10'000)                            \
   uint32_fn(9, standstill_max_egress_bytes_per_s, 50 << 17)             \
+  uint32_fn(16, standstill_min_egress_bytes_per_s, 1 << 17)             \
   uint32_fn(10, max_leader_window_desync, 250)                          \
   duration_fn(11, bad_signature_ban_duration, 5'000)                    \
   uint32_fn(12, candidate_resolve_rate_limit, 10)                       \
   duration_fn(13, min_block_interval, 0)                                \
-  duration_fn(14, no_empty_blocks_on_error_timeout, 15'000)
+  duration_fn(14, no_empty_blocks_on_error_timeout, 15'000)             \
+  uint32_fn(15, certificate_gossip_neighbors, 20)                       \
+  uint32_fn(17, collator_max_future_window, 4)                          \
+  duration_fn(18, collator_max_sync_delay, 10'000)
   // clang-format on
 
   struct NoncriticalParams {

@@ -89,7 +89,7 @@ td::Status BroadcastSimple::run(OverlayImpl *overlay) {
       overlay->check_source_eligible(source_, cert_.get(), static_cast<td::uint32>(data_.size()), /* is_fec = */ false,
                                      /* is_any_sender = */ flags_ & Overlays::BroadcastFlagAnySender(), src_peer_id_);
   if (r == BroadcastCheckResult::Forbidden) {
-    return td::Status::Error(ErrorCode::error, "broadcast is forbidden");
+    return td::Status::Error(ErrorCode::notready, "broadcast is forbidden");
   }
   is_valid_ = r == BroadcastCheckResult::Allowed;
   BroadcastsLimiter &limiter = overlay->get_broadcasts_limiter(source_.compute_short_id(), cert_.get());
@@ -211,13 +211,13 @@ void BroadcastsSimple::process_query(adnl::AdnlNodeIdShort src, ton_api::overlay
                                      td::Promise<td::BufferSlice> promise) {
   auto it = broadcasts_.find(query.hash_);
   if (it == broadcasts_.end()) {
-    VLOG(OVERLAY_NOTICE) << this << ": received getBroadcastQuery(" << query.hash_ << ") from " << src
-                         << " but broadcast is unknown";
+    VLOG(overlay, INFO) << this << ": received getBroadcastQuery(" << query.hash_ << ") from " << src
+                        << " but broadcast is unknown";
     promise.set_value(create_serialize_tl_object<ton_api::overlay_broadcastNotFound>());
     return;
   }
-  VLOG(OVERLAY_DEBUG) << this << ": received getBroadcastQuery(" << query.hash_ << ") from " << src
-                      << " sending broadcast";
+  VLOG(overlay, DEBUG) << this << ": received getBroadcastQuery(" << query.hash_ << ") from " << src
+                       << " sending broadcast";
   promise.set_value(it->second->serialize());
 }
 

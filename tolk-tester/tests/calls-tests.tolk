@@ -36,8 +36,8 @@ fun Point.incrementX(mutate self, deltaX: int = 1) {
     self.x += deltaX;
 }
 
-fun makeCost(cost: coins = ton("0.05")) {
-    return cost + ton("0.05") + ton("0.");
+fun makeCost(cost: coins = grams("0.05")) {
+    return cost + grams("0.05") + grams("0.");
 }
 
 fun makeUnion(v: int | slice = 0) {
@@ -109,7 +109,7 @@ fun test3() {
 fun test4() {
     return (
         makeCost(),
-        makeCost(ton("0.1")),
+        makeCost(grams("0.1")),
         makeUnion() is int,
         makeUnion(),
         makeUnion(makeCost()),
@@ -200,14 +200,11 @@ fun test12() {
     catch (ex) { return ex; }
 }
 
-@pure
 fun int.increment(mutate self) { self += 1 }
-@pure
 fun int.clone(self): int { return self }
 
 global g113: int
 
-@pure
 fun pure113(mutate p113: int) {
     var l113 = 0;
     l113.increment();

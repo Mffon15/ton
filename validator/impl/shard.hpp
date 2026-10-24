@@ -112,7 +112,9 @@ class MasterchainStateQ : public MasterchainState, public ShardStateQ {
   Ref<block::ValidatorSet> get_validator_set(ShardIdFull shard) const override;
   Ref<block::ValidatorSet> get_next_validator_set(ShardIdFull shard) const override;
   Ref<block::ValidatorSet> get_total_validator_set(int next) const override;  // next = -1 -> prev, next = 0 -> cur
-  Ref<block::ValidatorSet> get_validator_set(ShardIdFull shard, UnixTime ts, CatchainSeqno cc_seqno) const;
+  Ref<block::ValidatorSet> get_validator_set(ShardIdFull shard, CatchainSeqno cc_seqno) const override;
+  bool is_current_or_next_masterchain_validator(const PublicKeyHash& key) const override;
+  Ref<block::ValidatorSet> get_next_validator_set(ShardIdFull shard, CatchainSeqno cc_seqno) const;
   bool rotated_all_shards() const override;
   std::vector<Ref<McShardHash>> get_shards() const override;
   td::Ref<McShardHash> get_shard_from_config(ShardIdFull shard, bool exact) const override;
@@ -130,15 +132,14 @@ class MasterchainStateQ : public MasterchainState, public ShardStateQ {
   td::uint32 monitor_min_split_depth(WorkchainId workchain_id) const override;
   td::uint32 min_split_depth(WorkchainId workchain_id) const override;
   BlockSeqno min_ref_masterchain_seqno() const override;
-  td::Status prepare() override;
   ZeroStateIdExt get_zerostate_id() const {
     return zerostate_id_;
   }
-  ValidatorSessionConfig get_consensus_config() const override {
-    return config_->get_consensus_config();
-  }
-  td::optional<ton::NewConsensusConfig> get_new_consensus_config(WorkchainId wc) const override {
+  NewConsensusConfig get_new_consensus_config(WorkchainId wc) const override {
     return config_->get_new_consensus_config(wc);
+  }
+  block::CatchainValidatorsConfig get_catchain_validators_config() const override {
+    return config_->get_catchain_validators_config();
   }
   block::SizeLimitsConfig::ExtMsgLimits get_ext_msg_limits() const override {
     auto R = config_->get_size_limits_config();
@@ -150,6 +151,15 @@ class MasterchainStateQ : public MasterchainState, public ShardStateQ {
       return R.ok()->imported_msg_queue;
     }
     return {};
+  }
+  td::Result<block::ValidatorRegistryConfig> get_validator_registry_config() const override {
+    return config_->get_validator_registry_config();
+  }
+  td::Result<td::uint32> get_validator_elections_end_before() const override {
+    return config_->get_validator_elections_end_before();
+  }
+  int get_global_version() const override {
+    return config_->get_global_version();
   }
   BlockIdExt last_key_block_id() const override;
   BlockIdExt next_key_block_id(BlockSeqno seqno) const override;
@@ -184,7 +194,7 @@ class MasterchainStateQ : public MasterchainState, public ShardStateQ {
   MasterchainStateQ(const MasterchainStateQ& other) = default;
   td::Status mc_init();
   td::Status mc_reinit();
-  Ref<block::ValidatorSet> compute_validator_set(ShardIdFull shard, const block::TotalValidatorSet& vset, UnixTime time,
+  Ref<block::ValidatorSet> compute_validator_set(ShardIdFull shard, const block::TotalValidatorSet& vset,
                                                  CatchainSeqno cc_seqno) const;
 };
 #if TD_MSVC

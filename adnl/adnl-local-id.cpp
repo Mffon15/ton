@@ -17,7 +17,9 @@
     Copyright 2017-2020 Telegram Systems LLP
 */
 #include "keys/encryptor.h"
+#include "metrics/tl-traffic-bucket.h"
 #include "td/utils/Random.h"
+#include "td/utils/Timer.h"
 
 #include "adnl-local-id.h"
 #include "utils.hpp"
@@ -39,16 +41,11 @@ AdnlNodeIdShort AdnlLocalId::get_short_id() const {
   return short_id_;
 }
 
-AdnlAddressList AdnlLocalId::get_addr_list() const {
-  CHECK(!addr_list_.empty());
-  return addr_list_;
-}
-
 void AdnlLocalId::receive(td::IPAddress addr, td::BufferSlice data) {
   [](AdnlLocalId *self, td::IPAddress addr, td::BufferSlice data) -> td::actor::Task<> {
     auto R = co_await self->receive_coro(addr, std::move(data)).wrap();
     if (R.is_error()) {
-      VLOG(ADNL_NOTICE) << self << ": dropping IN message from " << addr << ": " << R.move_as_error();
+      VLOG(adnl, INFO) << self << ": dropping IN message from " << addr << ": " << R.move_as_error();
     }
     co_return {};
   }(this, std::move(addr), std::move(data))
@@ -104,12 +101,21 @@ void AdnlLocalId::deliver(AdnlNodeIdShort src, td::BufferSlice data) {
       return;
     }
   }
-  VLOG(ADNL_INFO) << this << ": dropping IN message from " << src
-                  << ": no callbacks for custom message. firstint=" << td::TlParser(s.as_slice()).fetch_int();
+  VLOG(adnl, INFO) << this << ": dropping IN message from " << src
+                   << ": no callbacks for custom message. firstint=" << td::TlParser(s.as_slice()).fetch_int();
 }
 
 void AdnlLocalId::deliver_query(AdnlNodeIdShort src, td::BufferSlice data, td::Promise<td::BufferSlice> promise) {
   auto s = std::move(data);
+  // Every transport (peer pairs, RLDP2, QUIC, the ext server) funnels its queries through here, so
+  // this is the one place that times dispatch-to-answer. A dropped promise still runs the lambda
+  // ("Lost promise"), so an abandoned query is recorded as failed instead of vanishing.
+  // The answer may complete on any thread, so the recording happens on the peer table's own thread.
+  promise = [timer = td::Timer(), magic = metrics::resolve_tl_magic(s.as_slice()), src, peer_table = peer_table_,
+             promise = std::move(promise)](td::Result<td::BufferSlice> R) mutable {
+    td::actor::send_closure(peer_table, &AdnlPeerTable::record_query_duration, src, magic, timer.elapsed(), R.is_ok());
+    promise.set_result(std::move(R));
+  };
   for (auto &cb : cb_) {
     auto f = cb.first;
     if (f.length() <= s.length() && s.as_slice().substr(0, f.length()) == f) {
@@ -117,8 +123,8 @@ void AdnlLocalId::deliver_query(AdnlNodeIdShort src, td::BufferSlice data, td::P
       return;
     }
   }
-  VLOG(ADNL_INFO) << this << ": dropping IN message from " << src
-                  << ": no callbacks for custom query. firstint=" << td::TlParser(s.as_slice()).fetch_int();
+  VLOG(adnl, INFO) << this << ": dropping IN message from " << src
+                   << ": no callbacks for custom query. firstint=" << td::TlParser(s.as_slice()).fetch_int();
   promise.set_error(td::Status::Error(ErrorCode::warning, PSTRING() << "dropping IN message from " << src
                                                                     << ": no callbacks for custom query. firstint="
                                                                     << td::TlParser(s.as_slice()).fetch_int()));
@@ -129,9 +135,9 @@ void AdnlLocalId::subscribe(std::string prefix, std::unique_ptr<AdnlPeerTable::C
   for (auto &cb : cb_) {
     auto G = td::Slice(cb.first);
     if (S.size() < G.size()) {
-      LOG_CHECK(G.substr(0, S.size()) != S) << this << ": duplicate subscribe prefix";
+      LOG_CHECK(G.substr(0, S.size()) != S) << this << ": duplicate subscribe prefix " << td::buffer_to_hex(prefix);
     } else {
-      LOG_CHECK(S.substr(0, G.size()) != G) << this << ": duplicate subscribe prefix";
+      LOG_CHECK(S.substr(0, G.size()) != G) << this << ": duplicate subscribe prefix " << td::buffer_to_hex(prefix);
     }
   }
   cb_.emplace_back(prefix, std::move(callback));
@@ -147,7 +153,7 @@ void AdnlLocalId::unsubscribe(std::string prefix) {
       it++;
     }
   }
-  LOG_CHECK(deleted) << this << ": cannot unsubscribe: prefix not found";
+  LOG_CHECK(deleted) << this << ": cannot unsubscribe: prefix " << td::buffer_to_hex(prefix) << " not found";
 }
 
 void AdnlLocalId::update_address_list(AdnlAddressList addr_list) {
@@ -155,14 +161,14 @@ void AdnlLocalId::update_address_list(AdnlAddressList addr_list) {
   addr_list_.set_reinit_date(Adnl::adnl_start_time());
   addr_list_.set_version(static_cast<td::int32>(td::Clocks::system()));
 
-  VLOG(ADNL_INFO) << this << ": updated addr list. New version set to " << addr_list_.version();
+  VLOG(adnl, INFO) << this << ": updated addr list. New version set to " << addr_list_.version();
 
   publish_address_list();
 }
 
 void AdnlLocalId::publish_address_list() {
   if (dht_node_.empty() || addr_list_.empty() || (addr_list_.size() == 0 && !addr_list_.has_reverse())) {
-    VLOG(ADNL_NOTICE) << this << ": skipping public addr list, because localid (or dht node) not fully initialized";
+    VLOG(adnl, INFO) << this << ": skipping public addr list, because localid (or dht node) not fully initialized";
     return;
   }
 
@@ -177,12 +183,15 @@ void AdnlLocalId::publish_address_list() {
                                        dht_key_description = std::move(dht_key_description),
                                        print_id = print_id()](td::Result<td::BufferSlice> R) mutable {
     if (R.is_error()) {
-      LOG(ERROR) << print_id << ": cannot sign: " << R.move_as_error();
+      VLOG(adnl, ERROR) << print_id << ": cannot sign: " << R.move_as_error();
       return;
     }
 
     dht_key_description.update_signature(R.move_as_ok());
-    dht_key_description.check().ensure();
+    if (auto S = dht_key_description.check(); S.is_error()) {
+      VLOG(adnl, ERROR) << print_id << ": dht key: " << S;
+      return;
+    }
 
     auto ttl = static_cast<td::uint32>(td::Clocks::system() + 3600);
     dht::DhtValue dht_value{std::move(dht_key_description), serialize_tl_object(addr_list, true), ttl,
@@ -193,17 +202,20 @@ void AdnlLocalId::publish_address_list() {
     auto Q = td::PromiseCreator::lambda(
         [dht_node, dht_value = std::move(dht_value), print_id](td::Result<td::BufferSlice> R) mutable {
           if (R.is_error()) {
-            LOG(ERROR) << print_id << ": cannot sign: " << R.move_as_error();
+            VLOG(adnl, ERROR) << print_id << ": cannot sign: " << R.move_as_error();
             return;
           }
           dht_value.update_signature(R.move_as_ok());
-          dht_value.check().ensure();
+          if (auto S = dht_value.check(); S.is_error()) {
+            VLOG(adnl, ERROR) << print_id << ": dht value: " << S;
+            return;
+          }
 
           auto E = td::PromiseCreator::lambda([print_id](td::Result<td::Unit> R) {
             if (R.is_error()) {
-              VLOG(ADNL_NOTICE) << print_id << ": failed to update addr list in DHT: " << R.move_as_error();
+              VLOG(adnl, INFO) << print_id << ": failed to update addr list in DHT: " << R.move_as_error();
             } else {
-              VLOG(ADNL_INFO) << print_id << ": updated dht addr list";
+              VLOG(adnl, INFO) << print_id << ": updated dht addr list";
             }
           });
 
@@ -220,9 +232,9 @@ void AdnlLocalId::publish_address_list() {
     td::actor::send_closure(
         dht_node_, &dht::Dht::register_reverse_connection, id_, [print_id = print_id()](td::Result<td::Unit> R) {
           if (R.is_error()) {
-            VLOG(ADNL_NOTICE) << print_id << ": failed to register reverse connection in DHT: " << R.move_as_error();
+            VLOG(adnl, INFO) << print_id << ": failed to register reverse connection in DHT: " << R.move_as_error();
           } else {
-            VLOG(ADNL_INFO) << print_id << ": registered reverse connection";
+            VLOG(adnl, INFO) << print_id << ": registered reverse connection";
           }
         });
   }
@@ -243,7 +255,7 @@ AdnlLocalId::AdnlLocalId(AdnlNodeIdFull id, AdnlAddressList addr_list, td::uint3
     addr_list_.set_version(static_cast<td::int32>(td::Clocks::system()));
   }
 
-  VLOG(ADNL_INFO) << this << ": created local id " << short_id_;
+  VLOG(adnl, INFO) << this << ": created local id " << short_id_;
 }
 
 void AdnlLocalId::get_self_node(td::Promise<AdnlNode> promise) {

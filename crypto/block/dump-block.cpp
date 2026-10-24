@@ -234,9 +234,9 @@ td::Status test_vset() {
   if (cc_seqno == ~0U) {
     return td::Status::Error("cannot compute cc_seqno for shard "s + shard.to_str());
   }
-  auto nodes = config->compute_validator_set(shard, *cur_validators, now, cc_seqno);
+  auto nodes = config->compute_validator_set(shard, *cur_validators, cc_seqno);
   if (nodes.empty()) {
-    return td::Status::Error(PSTRING() << "compute_validator_set() for " << shard << "," << now << "," << cc_seqno
+    return td::Status::Error(PSTRING() << "compute_validator_set() for " << shard << "," << cc_seqno
                                        << " returned empty list");
   }
   for (auto& x : nodes) {
@@ -263,7 +263,6 @@ int main(int argc, char* const argv[]) {
   bool vset_compute_test = false;
   bool store_loaded = false;
   int dump = 3;
-  auto zerostate = std::make_unique<block::ZerostateInfo>();
   while ((i = getopt(argc, argv, "CSt:hqv:V")) != -1) {
     switch (i) {
       case 'C':
