@@ -1,0 +1,62 @@
+name: Weekly upstream sync
+# يمنع تكرار التأخّر (كان 492 كومت خلف ton-blockchain/ton)
+# يفتح طلب دمج بدل الدفع المباشر إلى master
+on:
+  schedule:
+    - cron: '23 5 * * 1'   # كل اثنين 05:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/ton-blockchain/ton.git 2>/dev/null || true
+          git fetch upstream master --no-tags
+
+      - name: Merge upstream into a sync branch
+        id: merge
+        run: |
+          BR="sync/upstream-$(date +%F)"
+          echo "branch=$BR" >> "$GITHUB_OUTPUT"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions@users.noreply.github.com"
+          git checkout -B "$BR" origin/master
+          if ! git merge --no-edit upstream/master; then
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            git merge --abort
+            echo "::warning::تعارض عند دمج upstream — يحتاج تدخلاً يدوياً"
+            exit 0
+          fi
+          echo "conflict=false" >> "$GITHUB_OUTPUT"
+          echo "behind=$(git rev-list --count HEAD..upstream/master)" >> "$GITHUB_OUTPUT"
+
+      - name: Push sync branch
+        if: steps.merge.outputs.conflict == 'false'
+        run: |
+          BR="${{ steps.merge.outputs.branch }}"
+          git push --force-with-lease origin "$BR"
+
+      - name: Open or update pull request
+        if: steps.merge.outputs.conflict == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BR="${{ steps.merge.outputs.branch }}"
+          if gh pr list --head "$BR" --json number | grep -q '[0-9]'; then
+            echo "طلب دمج موجود بالفعل لـ $BR"
+          else
+            gh pr create --base master --head "$BR" \
+              --title "chore: weekly upstream sync $BR" \
+              --body "مزامنة تلقائية من ton-blockchain/ton. راجع الفروق قبل الدمج. يتم إنشاؤها كل اثنين 05:23 UTC."
+          fi
