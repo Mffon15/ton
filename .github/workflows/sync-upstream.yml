@@ -1,62 +1,95 @@
 name: Weekly upstream sync
-# يمنع تكرار التأخّر (كان 492 كومت خلف ton-blockchain/ton)
-# يفتح طلب دمج بدل الدفع المباشر إلى master
+
 on:
   schedule:
-    - cron: '23 5 * * 1'   # كل اثنين 05:23 UTC
+    - cron: '23 5 * * 1'
   workflow_dispatch:
 
 permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: weekly-upstream-sync
+  cancel-in-progress: false
+
 jobs:
   sync:
+    # This automation is for the fork, not the upstream TON repository.
+    # Manual runs must also use the trusted default branch.
+    if: github.repository == 'Mffon15/ton' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_REPO: ${{ github.repository }}
+      SYNC_BRANCH: sync/upstream
+
     steps:
-      - name: Checkout with full history
-        uses: actions/checkout@v4
+      - name: Checkout fork master
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: master
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Fetch upstream
-        run: |
-          git remote add upstream https://github.com/ton-blockchain/ton.git 2>/dev/null || true
-          git fetch upstream master --no-tags
-
-      - name: Merge upstream into a sync branch
+      - name: Prepare upstream merge
         id: merge
+        shell: bash
         run: |
-          BR="sync/upstream-$(date +%F)"
-          echo "branch=$BR" >> "$GITHUB_OUTPUT"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions@users.noreply.github.com"
-          git checkout -B "$BR" origin/master
-          if ! git merge --no-edit upstream/master; then
-            echo "conflict=true" >> "$GITHUB_OUTPUT"
-            git merge --abort
-            echo "::warning::تعارض عند دمج upstream — يحتاج تدخلاً يدوياً"
+          set -euo pipefail
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+          git fetch --no-tags origin '+refs/heads/master:refs/remotes/origin/master'
+          git fetch --no-tags https://github.com/ton-blockchain/ton.git \
+            '+refs/heads/master:refs/remotes/upstream/master'
+
+          if git merge-base --is-ancestor upstream/master origin/master; then
+            echo "Already synchronized; no branch or pull request needed." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          echo "conflict=false" >> "$GITHUB_OUTPUT"
-          echo "behind=$(git rev-list --count HEAD..upstream/master)" >> "$GITHUB_OUTPUT"
 
-      - name: Push sync branch
-        if: steps.merge.outputs.conflict == 'false'
-        run: |
-          BR="${{ steps.merge.outputs.branch }}"
-          git push --force-with-lease origin "$BR"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$SYNC_BRANCH" origin/master
+          if ! git merge --no-edit upstream/master; then
+            git merge --abort
+            echo "::error::Upstream merge failed. Resolve conflicts manually; nothing was pushed."
+            echo "Upstream merge failed; manual intervention is required. Nothing was pushed." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
-      - name: Open or update pull request
-        if: steps.merge.outputs.conflict == 'false'
+          if git diff --quiet origin/master HEAD; then
+            echo "Upstream adds no file changes; no pull request needed." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Push sync branch with a lease
+        if: steps.merge.outputs.changed == 'true'
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          BR="${{ steps.merge.outputs.branch }}"
-          if gh pr list --head "$BR" --json number | grep -q '[0-9]'; then
-            echo "طلب دمج موجود بالفعل لـ $BR"
+          set -euo pipefail
+          expected=$(git ls-remote --heads origin "refs/heads/$SYNC_BRANCH" | cut -f1)
+          git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+            push --force-with-lease="refs/heads/$SYNC_BRANCH:$expected" \
+            origin "HEAD:refs/heads/$SYNC_BRANCH"
+
+      - name: Open or update pull request in this fork
+        if: steps.merge.outputs.changed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          pr=$(gh pr list --repo "$GH_REPO" --base master --head "$SYNC_BRANCH" \
+            --state open --json number --jq '.[0].number // empty')
+          title="chore: sync ton-blockchain/ton master"
+          body="Automatic upstream synchronization. Review the diff and approve/run required CI checks before merging. This workflow never merges pull requests."
+          if [[ -n "$pr" ]]; then
+            gh pr edit "$pr" --repo "$GH_REPO" --title "$title" --body "$body"
           else
-            gh pr create --base master --head "$BR" \
-              --title "chore: weekly upstream sync $BR" \
-              --body "مزامنة تلقائية من ton-blockchain/ton. راجع الفروق قبل الدمج. يتم إنشاؤها كل اثنين 05:23 UTC."
+            gh pr create --repo "$GH_REPO" --base master --head "$SYNC_BRANCH" \
+              --title "$title" --body "$body"
           fi
+          echo "Sync branch pushed; the pull request is ready for review. No automatic merge was performed." >> "$GITHUB_STEP_SUMMARY"
